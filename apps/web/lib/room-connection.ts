@@ -1,8 +1,10 @@
 import * as Y from "yjs";
 import { WebsocketProvider } from "y-websocket";
 import { IndexeddbPersistence } from "y-indexeddb";
-import { CloseCode, type AwarenessState } from "@liveboard/shared";
+import { type AwarenessState } from "@liveboard/shared";
 import type { Identity } from "./identity";
+import { resolveTerminalClose, terminalCloseAction } from "./terminal-close";
+import { createSyncWatchdog } from "./sync-watchdog";
 
 export type ConnectionStatus =
   | "offline" //       browser has no network; edits go to IndexedDB only
@@ -10,7 +12,8 @@ export type ConnectionStatus =
   | "connected"
   | "disconnected" //  lost the socket, y-websocket is backing off and retrying
   | "room-full"
-  | "unauthorized";
+  | "unauthorized"
+  | "connect-failed"; // couldn't sync after retries (auth/network/proxy)
 
 export interface RoomConnection {
   doc: Y.Doc;
@@ -18,10 +21,24 @@ export interface RoomConnection {
   destroy(): void;
 }
 
+export interface RoomConnectionOptions {
+  roomId: string;
+  identity: Identity;
+  wsUrl: string;
+  onStatus: (s: ConnectionStatus) => void;
+  /** Max ms after `open` to wait for first successful sync before retrying. */
+  syncTimeoutMs?: number;
+  /** Max hung-session / auth refresh attempts before showing connect-failed. */
+  maxConnectAttempts?: number;
+}
+
 interface TokenResponse {
   token: string;
   expiresAt: number;
 }
+
+const DEFAULT_SYNC_TIMEOUT_MS = 5_000;
+const DEFAULT_MAX_CONNECT_ATTEMPTS = 3;
 
 async function fetchRoomToken(roomId: string, identity: Identity): Promise<TokenResponse> {
   const res = await fetch("/api/token", {
@@ -35,22 +52,16 @@ async function fetchRoomToken(roomId: string, identity: Identity): Promise<Token
 
 /**
  * Wires a Y.Doc to (1) IndexedDB for offline-first persistence and (2) the sync server.
- *
- * Reconnect strategy:
- *  - Transient drops (network, server deploy -> close 1001/1006): y-websocket retries with
- *    exponential backoff (100ms * 2^n, capped at `maxBackoffTime`).
- *  - 4401 (expired/invalid token): fetch a fresh token, then reconnect.
- *  - 4408 (rate limited): wait, then reconnect.
- *  - 4403 / 4429: terminal, surface to the UI.
- *  - `online` event: reconnect immediately instead of waiting out the backoff.
  */
-export function createRoomConnection(opts: {
-  roomId: string;
-  identity: Identity;
-  wsUrl: string;
-  onStatus: (s: ConnectionStatus) => void;
-}): RoomConnection {
-  const { roomId, identity, wsUrl, onStatus } = opts;
+export function createRoomConnection(opts: RoomConnectionOptions): RoomConnection {
+  const {
+    roomId,
+    identity,
+    wsUrl,
+    onStatus,
+    syncTimeoutMs = DEFAULT_SYNC_TIMEOUT_MS,
+    maxConnectAttempts = DEFAULT_MAX_CONNECT_ATTEMPTS,
+  } = opts;
   const doc = new Y.Doc();
   const idb = new IndexeddbPersistence(`liveboard:${roomId}`, doc);
   const provider = new WebsocketProvider(wsUrl, roomId, doc, {
@@ -66,10 +77,32 @@ export function createRoomConnection(opts: {
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let tokenFailures = 0;
+  let handledTerminalClose = false;
+  let authRefreshAttempts = 0;
+  let connectBackoffAttempt = 0;
+
+  const failConnect = () => {
+    provider.shouldConnect = false;
+    provider.disconnect();
+    onStatus("connect-failed");
+  };
+
+  const syncWatchdog = createSyncWatchdog({
+    timeoutMs: syncTimeoutMs,
+    maxAttempts: maxConnectAttempts,
+    onRetry: () => {
+      connectBackoffAttempt++;
+      provider.disconnect();
+      provider.shouldConnect = false;
+      const delay = Math.min(8_000, 1_000 * 2 ** (connectBackoffAttempt - 1));
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => void refreshToken(true), delay);
+    },
+    onGiveUp: failConnect,
+  });
 
   const scheduleRefresh = (expiresAt: number) => {
     clearTimeout(refreshTimer);
-    // Refresh one minute before expiry; the new token is used on the next (re)connect.
     const ms = Math.max(5_000, expiresAt * 1000 - Date.now() - 60_000);
     refreshTimer = setTimeout(() => void refreshToken(false), ms);
   };
@@ -81,7 +114,11 @@ export function createRoomConnection(opts: {
       tokenFailures = 0;
       provider.params = { token };
       scheduleRefresh(expiresAt);
-      if (connectAfter) provider.connect();
+      if (connectAfter) {
+        provider.shouldConnect = true;
+        syncWatchdog.armConnecting();
+        provider.connect();
+      }
     } catch {
       if (destroyed) return;
       onStatus(navigator.onLine ? "disconnected" : "offline");
@@ -91,17 +128,68 @@ export function createRoomConnection(opts: {
     }
   }
 
+  const applyTerminalClose = (code: number) => {
+    if (handledTerminalClose) return;
+    const action = terminalCloseAction(code);
+    if (!action) return;
+    handledTerminalClose = true;
+    syncWatchdog.dispose();
+    if (action === "refresh-token") {
+      authRefreshAttempts++;
+      if (authRefreshAttempts > maxConnectAttempts) {
+        failConnect();
+        return;
+      }
+      void refreshToken(true);
+    } else if (action === "retry-rate-limit") {
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => {
+        provider.shouldConnect = true;
+        syncWatchdog.armConnecting();
+        provider.connect();
+      }, 5_000);
+    } else if (action === "room-full") onStatus("room-full");
+    else onStatus("unauthorized");
+  };
+
+  provider.on("sync", (synced: boolean) => {
+    if (synced) {
+      authRefreshAttempts = 0;
+      connectBackoffAttempt = 0;
+      syncWatchdog.notifySynced();
+    }
+  });
+
   provider.on("status", ({ status }) => {
+    if (status === "connected") handledTerminalClose = false;
+    if (status === "connecting") syncWatchdog.armConnecting();
     onStatus(status === "disconnected" && !navigator.onLine ? "offline" : status);
   });
 
-  provider.on("closed", ({ code }) => {
-    if (code === CloseCode.Unauthorized) void refreshToken(true);
-    else if (code === CloseCode.RateLimited) {
-      clearTimeout(retryTimer);
-      retryTimer = setTimeout(() => provider.connect(), 5_000);
-    } else if (code === CloseCode.RoomFull) onStatus("room-full");
-    else onStatus("unauthorized");
+  provider.on("connection-close", (event) => {
+    if (!event) return;
+    syncWatchdog.dispose();
+    const resolved = resolveTerminalClose(event.code, event.reason);
+    if (resolved !== null && event.code < 4400) {
+      provider.shouldConnect = false;
+      applyTerminalClose(resolved);
+      return;
+    }
+    if (event.code === 1006 || event.code === 1000) {
+      // Proxy dropped the close frame; retry with a fresh token up to the cap.
+      authRefreshAttempts++;
+      if (authRefreshAttempts > maxConnectAttempts) {
+        failConnect();
+        return;
+      }
+      void refreshToken(true);
+    }
+  });
+
+  provider.on("closed", ({ code, reason }) => {
+    syncWatchdog.dispose();
+    const resolved = resolveTerminalClose(code, reason) ?? code;
+    applyTerminalClose(resolved);
   });
 
   const handleOnline = () => {
@@ -112,7 +200,6 @@ export function createRoomConnection(opts: {
   window.addEventListener("offline", handleOffline);
 
   onStatus(navigator.onLine ? "connecting" : "offline");
-  // Paint local (IndexedDB) state first, then go online.
   void idb.whenSynced.then(() => {
     if (!destroyed) void refreshToken(true);
   });
@@ -122,6 +209,7 @@ export function createRoomConnection(opts: {
     provider,
     destroy() {
       destroyed = true;
+      syncWatchdog.dispose();
       clearTimeout(refreshTimer);
       clearTimeout(retryTimer);
       window.removeEventListener("online", handleOnline);

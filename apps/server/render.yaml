@@ -1,12 +1,12 @@
 # Render Blueprint for the LiveBoard sync server.
-# Render looks for render.yaml at the repo root by default. When creating the
-# Blueprint in the dashboard, set "Blueprint Path" to apps/server/render.yaml.
-# Docs: https://render.com/docs/blueprint-spec
+# In the Render dashboard, set "Blueprint Path" to apps/server/render.yaml.
+# Default: free web service + in-memory persistence (no Postgres/Redis bill).
+# Upgrade path: set PERSISTENCE=postgres, attach DATABASE_URL, optional REDIS_URL — see README.
 services:
   - type: web
     name: liveboard-sync
     runtime: node
-    plan: 0.5c-512mb         # paid instance: `free` spins down when idle, which drops every socket
+    plan: free
     region: singapore
     buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm turbo run build --filter=@liveboard/server
     startCommand: node apps/server/dist/index.js
@@ -21,32 +21,24 @@ services:
       - key: NODE_VERSION
         value: "22"
       - key: LIVEBOARD_JWT_SECRET
-        sync: false          # set in the dashboard; must match the Vercel value
+        sync: false
       - key: ALLOWED_ORIGINS
-        sync: false          # e.g. https://liveboard.vercel.app
+        sync: false
       - key: PERSISTENCE
-        value: postgres
-      - key: DATABASE_URL
-        fromDatabase:
-          name: liveboard-db
-          property: connectionString
-      - key: REDIS_URL
-        fromService:
-          type: keyvalue
-          name: liveboard-kv
-          property: connectionString
+        value: memory
       - key: COMPACT_EVERY_N_UPDATES
         value: "500"
 
-  - type: keyvalue
-    name: liveboard-kv
-    plan: 256mb
-    region: singapore
-    ipAllowList: []          # only reachable from services in the same Render account/region
-
-databases:
-  - name: liveboard-db
-    # plan omitted -> Render's default Postgres compute plan
-    region: singapore
-    databaseName: liveboard
-    user: liveboard
+# Optional paid add-ons (uncomment and wire env vars on the web service above):
+#
+#  - type: keyvalue
+#    name: liveboard-kv
+#    plan: 256mb
+#    region: singapore
+#    ipAllowList: []
+#
+# databases:
+#   - name: liveboard-db
+#     region: singapore
+#     databaseName: liveboard
+#     user: liveboard

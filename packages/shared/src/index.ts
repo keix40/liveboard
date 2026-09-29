@@ -30,6 +30,13 @@ export const MessageType = {
 export type MessageType = (typeof MessageType)[keyof typeof MessageType];
 
 /** WebSocket close codes used by the server (4000-4999 is the app-private range). */
+export {
+  APP_CLOSE_PREFIX,
+  formatAppCloseReason,
+  isAppTerminalCloseCode,
+  parseAppCloseCode,
+} from "./ws-close.js";
+
 export const CloseCode = {
   Normal: 1000,
   GoingAway: 1001,

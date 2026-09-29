@@ -8,7 +8,8 @@ import { CloseCode, MessageType, type RoomTokenClaims } from "@liveboard/shared"
 import type { DocPersistence } from "./persistence/index.js";
 import type { PubSub, RoomBroadcast } from "./pubsub/index.js";
 import type { Logger } from "./logger.js";
-import { TokenBucket } from "./rate-limit.js";
+import { PerTurnTokenBucket, TokenBucket } from "./rate-limit.js";
+import { forceCloseWebSocket } from "./ws-close.js";
 import { encodeAwareness, encodeSyncStep1, encodeUpdate } from "./protocol.js";
 
 /** Transaction origins that must NOT be re-persisted / re-published. */
@@ -32,7 +33,10 @@ interface Client {
   user: RoomTokenClaims;
   /** Awareness clientIDs controlled by this socket (removed on disconnect). */
   awarenessIds: Set<number>;
-  limiter: TokenBucket;
+  limiter: PerTurnTokenBucket;
+  rateLimitTurn: number;
+  kicked: boolean;
+  onMessage: (data: WebSocket.RawData, isBinary: boolean) => void;
 }
 
 type AwarenessChange = { added: number[]; updated: number[]; removed: number[] };
@@ -83,16 +87,23 @@ export class Room {
       ws,
       user,
       awarenessIds: new Set(),
-      limiter: new TokenBucket(this.deps.rateLimit.msgsPerSec, this.deps.rateLimit.burst),
+      limiter: new PerTurnTokenBucket(
+        new TokenBucket(this.deps.rateLimit.msgsPerSec, this.deps.rateLimit.burst),
+      ),
+      rateLimitTurn: -1,
+      kicked: false,
+      onMessage: () => {},
+    };
+    client.onMessage = (data, isBinary) => {
+      if (client.kicked) return;
+      if (!isBinary) return this.kick(client, CloseCode.PolicyViolation, "binary frames only");
+      if (!client.limiter.take(client)) return this.kick(client, CloseCode.RateLimited, "rate limited");
+      const buf = Array.isArray(data) ? Buffer.concat(data) : data instanceof ArrayBuffer ? Buffer.from(data) : data;
+      this.handleMessage(client, new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength));
     };
     this.clients.set(ws, client);
 
-    ws.on("message", (data, isBinary) => {
-      if (!isBinary) return this.kick(client, CloseCode.PolicyViolation, "binary frames only");
-      if (!client.limiter.take()) return this.kick(client, CloseCode.RateLimited, "rate limited");
-      const buf = Array.isArray(data) ? Buffer.concat(data) : data instanceof ArrayBuffer ? Buffer.from(data) : data;
-      this.handleMessage(client, new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength));
-    });
+    ws.on("message", client.onMessage);
     ws.on("close", () => this.removeClient(ws));
     ws.on("error", () => this.removeClient(ws));
 
@@ -112,17 +123,24 @@ export class Room {
   }
 
   private kick(client: Client, code: number, reason: string) {
+    if (client.kicked) return;
+    client.kicked = true;
+    client.ws.off("message", client.onMessage);
+    this.clients.delete(client.ws);
+    awarenessProtocol.removeAwarenessStates(this.awareness, [...client.awarenessIds], null);
+    if (this.clients.size === 0) this.deps.onEmpty(this);
     this.deps.log.warn("closing client", { roomId: this.id, user: client.user.sub, code, reason });
-    client.ws.close(code, reason);
+    forceCloseWebSocket(client.ws, code, reason);
   }
 
   closeAll(code: number, reason: string): void {
-    for (const ws of this.clients.keys()) ws.close(code, reason);
+    for (const ws of this.clients.keys()) forceCloseWebSocket(ws, code, reason);
   }
 
   // ─── Incoming frames ────────────────────────────────────────────────────
 
   private handleMessage(client: Client, data: Uint8Array): void {
+    if (client.kicked) return;
     try {
       const decoder = decoding.createDecoder(data);
       const type = decoding.readVarUint(decoder);
