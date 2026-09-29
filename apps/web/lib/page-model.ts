@@ -59,7 +59,8 @@ export function writeAssets(doc: Y.Doc, pageId?: string): Y.Map<Y.Map<unknown>> 
 }
 
 /** Page metadata only — call when the user adds a page (not on read). */
-export function isBoundToDoc(doc: Y.Doc, type: Y.AbstractType<unknown> | null | undefined): type is Y.AbstractType<unknown> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function isBoundToDoc(doc: Y.Doc, type: Y.AbstractType<any> | null | undefined): type is Y.AbstractType<any> {
   return type != null && type.doc === doc;
 }
 
