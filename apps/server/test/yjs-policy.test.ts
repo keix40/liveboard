@@ -1,16 +1,25 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { YKEYS } from "@liveboard/shared";
-import { entityFingerprint, policyAllowsUpdate } from "../src/yjs-policy.js";
+import { LockGuard } from "../src/lock-guard.js";
+import {
+  entityFingerprint,
+  enforceLockedIdsCap,
+  lockMetaChangesAuthorized,
+  policyAllowsUpdate,
+  validateLockedUpdate,
+} from "../src/yjs-policy.js";
 
 describe("yjs-policy", () => {
   it("allows updates when nothing is locked", () => {
-    const doc = new Y.Doc();
-    doc.getArray(YKEYS.strokes).push([1]);
+    const live = new Y.Doc();
+    const shadow = new Y.Doc();
+    Y.applyUpdate(shadow, Y.encodeStateAsUpdate(live));
+    const guard = new LockGuard(live);
     const update = new Y.Doc();
     update.getArray(YKEYS.strokes).push([2]);
     const delta = Y.encodeStateAsUpdate(update);
-    expect(policyAllowsUpdate(doc, delta)).toBe(true);
+    expect(policyAllowsUpdate(live, shadow, delta, guard)).toBe(true);
   });
 
   it("rejects updates that mutate a locked shape", () => {
@@ -27,7 +36,39 @@ describe("yjs-policy", () => {
     const row = trial.getMap(YKEYS.shapes).get("shape-1");
     if (row instanceof Y.Map) row.set("x", 99);
     const bad = Y.encodeStateAsUpdate(trial, Y.encodeStateVector(doc));
-    expect(policyAllowsUpdate(doc, bad)).toBe(false);
+    const shadow = new Y.Doc();
+    Y.applyUpdate(shadow, Y.encodeStateAsUpdate(doc));
+    const guard = new LockGuard(doc);
+    expect(validateLockedUpdate(doc, shadow, bad, guard)).toBe(false);
+  });
+
+  it("rejects meta updates that exceed lockedIds cap", () => {
+    const live = new Y.Doc();
+    const shadow = new Y.Doc();
+    Y.applyUpdate(shadow, Y.encodeStateAsUpdate(live));
+    const guard = new LockGuard(live);
+    const trial = new Y.Doc();
+    const ids = Array.from({ length: 501 }, (_, i) => `id-${i}`);
+    trial.getMap(YKEYS.meta).set("lockedIds", ids);
+    const bad = Y.encodeStateAsUpdate(trial);
+    expect(policyAllowsUpdate(live, shadow, bad, guard)).toBe(false);
+  });
+
+  it("rejects unlock by non-owner locker", () => {
+    const live = new Y.Doc();
+    live.getMap(YKEYS.meta).set("lockedIds", ["a"]);
+    live.getMap(YKEYS.meta).set("lockOwners", { a: "user-a" });
+    live.getMap(YKEYS.meta).set("ownerId", "owner-1");
+    const shadow = new Y.Doc();
+    Y.applyUpdate(shadow, Y.encodeStateAsUpdate(live));
+    const guard = new LockGuard(live);
+    const trial = new Y.Doc();
+    Y.applyUpdate(trial, Y.encodeStateAsUpdate(live));
+    trial.getMap(YKEYS.meta).set("lockedIds", []);
+    trial.getMap(YKEYS.meta).set("lockOwners", {});
+    const bad = Y.encodeStateAsUpdate(trial, Y.encodeStateVector(live));
+    expect(validateLockedUpdate(live, shadow, bad, guard, 50, "user-b")).toBe(false);
+    expect(lockMetaChangesAuthorized(guard.snapshot(), new LockGuard(trial), "user-a", "owner-1")).toBe(true);
   });
 
   it("fingerprints entities consistently", () => {

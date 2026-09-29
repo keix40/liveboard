@@ -1,3 +1,6 @@
+import { ASSET_MAX_DECOMPRESSED_BYTES } from "@liveboard/shared";
+import { base64ToBytes } from "./base64";
+
 /** Decode gzip-or-raw base64 asset payloads to Blob URLs for canvas drawImage. */
 
 const cache = new Map<string, string>();
@@ -7,16 +10,19 @@ export async function assetDataToBlobUrl(dataBase64: string, mime: string): Prom
   const hit = cache.get(key);
   if (hit) return hit;
 
-  const binary = Uint8Array.from(atob(dataBase64), (c) => c.charCodeAt(0));
+  const binary = base64ToBytes(dataBase64);
   let bytes = binary;
   if (binary.length >= 2 && binary[0] === 0x1f && binary[1] === 0x8b) {
     if (typeof DecompressionStream === "undefined") {
       throw new Error("gzip assets require DecompressionStream");
     }
-    const stream = new Blob([binary]).stream().pipeThrough(new DecompressionStream("gzip"));
+    const stream = new Blob([new Uint8Array(binary)]).stream().pipeThrough(new DecompressionStream("gzip"));
     bytes = new Uint8Array(await new Response(stream).arrayBuffer());
   }
-  const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
+  if (bytes.length > ASSET_MAX_DECOMPRESSED_BYTES) {
+    throw new Error(`Asset exceeds decompressed limit (${ASSET_MAX_DECOMPRESSED_BYTES} bytes)`);
+  }
+  const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mime }));
   cache.set(key, url);
   return url;
 }

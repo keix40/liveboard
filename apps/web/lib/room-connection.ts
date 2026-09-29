@@ -27,7 +27,11 @@ export interface RoomConnectionOptions {
   wsUrl: string;
   role?: RoomRole;
   boardPassword?: string | null;
+  editCap?: string;
+  viewCap?: string;
+  legacyOpen?: boolean;
   onStatus: (s: ConnectionStatus) => void;
+  onRole?: (role: RoomRole) => void;
   /** Max ms after `open` to wait for first successful sync before retrying. */
   syncTimeoutMs?: number;
   /** Max hung-session / auth refresh attempts before showing connect-failed. */
@@ -38,6 +42,23 @@ interface TokenResponse {
   token: string;
   expiresAt: number;
   role?: RoomRole;
+  editLinkCap?: string;
+}
+
+function storedEditCap(roomId: string): string {
+  try {
+    return localStorage.getItem(`liveboard:edit:${roomId}`) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function persistEditCap(roomId: string, cap: string): void {
+  try {
+    if (cap) localStorage.setItem(`liveboard:edit:${roomId}`, cap);
+  } catch {
+    /* ignore */
+  }
 }
 
 const DEFAULT_SYNC_TIMEOUT_MS = 5_000;
@@ -48,6 +69,9 @@ async function fetchRoomToken(
   identity: Identity,
   role: RoomRole,
   password?: string | null,
+  editCap?: string,
+  viewCap?: string,
+  legacyOpen?: boolean,
 ): Promise<TokenResponse> {
   const res = await fetch("/api/token", {
     method: "POST",
@@ -58,8 +82,12 @@ async function fetchRoomToken(
       name: identity.name,
       role,
       password: password ?? "",
+      editCap: editCap ?? "",
+      viewCap: viewCap ?? "",
+      legacyOpen: legacyOpen === true,
     }),
   });
+  if (res.status === 403) throw new Error("token forbidden");
   if (!res.ok) throw new Error(`token request failed: ${res.status}`);
   return (await res.json()) as TokenResponse;
 }
@@ -74,7 +102,11 @@ export function createRoomConnection(opts: RoomConnectionOptions): RoomConnectio
     wsUrl,
     role = "editor",
     boardPassword = null,
+    editCap = "",
+    viewCap = "",
+    legacyOpen = true,
     onStatus,
+    onRole,
     syncTimeoutMs = DEFAULT_SYNC_TIMEOUT_MS,
     maxConnectAttempts = DEFAULT_MAX_CONNECT_ATTEMPTS,
   } = opts;
@@ -125,9 +157,20 @@ export function createRoomConnection(opts: RoomConnectionOptions): RoomConnectio
 
   async function refreshToken(connectAfter: boolean) {
     try {
-      const { token, expiresAt } = await fetchRoomToken(roomId, identity, role, boardPassword);
+      const cap = editCap || storedEditCap(roomId);
+      const { token, expiresAt, role: mintedRole, editLinkCap } = await fetchRoomToken(
+        roomId,
+        identity,
+        role,
+        boardPassword,
+        cap,
+        viewCap,
+        legacyOpen,
+      );
       if (destroyed) return;
       tokenFailures = 0;
+      if (editLinkCap) persistEditCap(roomId, editLinkCap);
+      if (mintedRole) onRole?.(mintedRole);
       provider.params = { token };
       scheduleRefresh(expiresAt);
       if (connectAfter) {
@@ -174,6 +217,10 @@ export function createRoomConnection(opts: RoomConnectionOptions): RoomConnectio
       connectBackoffAttempt = 0;
       syncWatchdog.notifySynced();
     }
+  });
+
+  provider.on("connection-error", () => {
+    /* y-websocket will retry; server may have sent resync step1 after policy reject */
   });
 
   provider.on("status", ({ status }) => {

@@ -11,6 +11,8 @@ import type { Logger } from "./logger.js";
 import { PerTurnTokenBucket, TokenBucket } from "./rate-limit.js";
 import { forceCloseWebSocket } from "./ws-close.js";
 import { encodeAwareness, encodeSyncStep1, encodeUpdate } from "./protocol.js";
+import { assetBudgetOkAfterUpdate } from "./asset-policy.js";
+import { LockGuard } from "./lock-guard.js";
 import { policyAllowsUpdate } from "./yjs-policy.js";
 
 /** Transaction origins that must NOT be re-persisted / re-published. */
@@ -49,6 +51,8 @@ type AwarenessChange = { added: number[]; updated: number[]; removed: number[] }
  */
 export class Room {
   readonly doc = new Y.Doc({ gc: true });
+  readonly shadowDoc = new Y.Doc({ gc: true });
+  readonly lockGuard: LockGuard;
   readonly awareness = new awarenessProtocol.Awareness(this.doc);
   private readonly clients = new Map<WebSocket, Client>();
   private readonly pendingWrites = new Set<Promise<unknown>>();
@@ -61,6 +65,7 @@ export class Room {
     readonly id: string,
     private readonly deps: RoomDeps,
   ) {
+    this.lockGuard = new LockGuard(this.doc);
     this.awareness.setLocalState(null); // the server itself has no presence
     this.doc.on("update", this.onDocUpdate);
     this.awareness.on("update", this.onAwarenessUpdate);
@@ -69,7 +74,11 @@ export class Room {
   static async load(id: string, deps: RoomDeps): Promise<Room> {
     const room = new Room(id, deps);
     const state = await deps.persistence.load(id);
-    if (state) Y.applyUpdate(room.doc, state, PERSISTENCE_ORIGIN);
+    if (state) {
+      Y.applyUpdate(room.doc, state, PERSISTENCE_ORIGIN);
+      Y.applyUpdate(room.shadowDoc, state, PERSISTENCE_ORIGIN);
+    }
+    room.lockGuard.refreshFromDoc();
     room.unsubscribe = await deps.pubsub.subscribe(id, room.onRemote);
     deps.log.debug("room loaded", { roomId: id, bytes: state?.byteLength ?? 0 });
     return room;
@@ -162,12 +171,21 @@ export class Room {
       case syncProtocol.messageYjsSyncStep2:
       case syncProtocol.messageYjsUpdate: {
         const update = decoding.readVarUint8Array(decoder);
-        if (!policyAllowsUpdate(this.doc, update)) {
-          this.kick(client, CloseCode.Forbidden, "locked content");
+        if (client.user.role === "viewer") {
+          /* Never apply viewer SyncStep2 — local IndexedDB state must not write the shared doc. */
+          client.syncComplete = true;
+          break;
+        }
+        if (!policyAllowsUpdate(this.doc, this.shadowDoc, update, this.lockGuard, client.user.sub)) {
+          this.send(client.ws, encodeSyncStep1(this.doc));
+          return;
+        }
+        if (!assetBudgetOkAfterUpdate(this.shadowDoc, update)) {
+          this.send(client.ws, encodeSyncStep1(this.doc));
           return;
         }
         Y.applyUpdate(this.doc, update, client.ws);
-        if (client.user.role === "viewer") client.syncComplete = true;
+        this.lockGuard.refreshFromDoc();
         break;
       }
       default:
@@ -214,6 +232,10 @@ export class Room {
     const frame = encodeUpdate(update);
     for (const ws of this.clients.keys()) if (ws !== origin) this.send(ws, frame);
 
+    if (origin !== PERSISTENCE_ORIGIN && origin !== REMOTE_ORIGIN) {
+      Y.applyUpdate(this.shadowDoc, update, origin);
+      this.lockGuard.refreshFromDoc();
+    }
     if (origin === PERSISTENCE_ORIGIN || origin === REMOTE_ORIGIN) return;
     // Local (client) update: persist + fan out to other instances.
     this.track(this.deps.persistence.storeUpdate(this.id, update));
@@ -240,7 +262,11 @@ export class Room {
   /** Messages from other server instances (Redis). */
   private onRemote = (msg: RoomBroadcast): void => {
     try {
-      if (msg.kind === "update") Y.applyUpdate(this.doc, msg.data, REMOTE_ORIGIN);
+      if (msg.kind === "update") {
+        Y.applyUpdate(this.doc, msg.data, REMOTE_ORIGIN);
+        Y.applyUpdate(this.shadowDoc, msg.data, REMOTE_ORIGIN);
+        this.lockGuard.refreshFromDoc();
+      }
       else awarenessProtocol.applyAwarenessUpdate(this.awareness, msg.data, REMOTE_ORIGIN);
     } catch (err) {
       this.deps.log.warn("bad remote message", { roomId: this.id, err: (err as Error).message });
@@ -291,6 +317,7 @@ export class Room {
     await this.flush();
     await this.unsubscribe();
     this.awareness.destroy();
+    this.shadowDoc.destroy();
     this.doc.destroy();
   }
 }

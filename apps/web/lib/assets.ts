@@ -1,5 +1,6 @@
 import * as Y from "yjs";
 import { ASSET_MAX_BYTES, ASSET_ROOM_MAX_BYTES, YKEYS } from "@liveboard/shared";
+import { bytesToBase64 } from "./base64";
 import { LOCAL_ORIGIN } from "./strokes";
 
 export interface BoardAsset {
@@ -29,13 +30,16 @@ function assetBytes(map: Y.Map<Y.Map<unknown>>): number {
 }
 
 export async function compressToBase64(bytes: Uint8Array): Promise<string> {
+  if (bytes.length > ASSET_MAX_BYTES) {
+    throw new Error(`File exceeds ${ASSET_MAX_BYTES} byte limit`);
+  }
   if (typeof CompressionStream === "undefined") {
-    return btoa(String.fromCharCode(...bytes));
+    return bytesToBase64(bytes);
   }
   const copy = new Uint8Array(bytes);
   const stream = new Blob([copy]).stream().pipeThrough(new CompressionStream("gzip"));
   const buf = new Uint8Array(await new Response(stream).arrayBuffer());
-  return btoa(String.fromCharCode(...buf));
+  return bytesToBase64(buf);
 }
 
 export type YAsset = Y.Map<unknown>;

@@ -5,6 +5,8 @@ import { readNote, type YNote } from "./notes";
 import type { BoardBackground } from "@liveboard/shared";
 import type { SelectableRef } from "./selection";
 import type { BoardAsset } from "./assets";
+import type { BoardReaction } from "./reactions";
+import type { PinnedComment } from "./comments";
 import { arrowHeadLength, arrowShaftEnd } from "./shape-geometry";
 
 export interface RenderBoardOpts {
@@ -25,6 +27,8 @@ export interface RenderBoardOpts {
   darkMode?: boolean;
   assets?: Map<string, BoardAsset>;
   assetImages?: Map<string, CanvasImageSource>;
+  reactions?: BoardReaction[];
+  comments?: PinnedComment[];
 }
 
 function applyCamera(ctx: CanvasRenderingContext2D, cam: Camera, dpr: number): void {
@@ -105,7 +109,13 @@ function drawBackground(
   const vh = cssHeight / camera.zoom;
   const ox = -camera.x / camera.zoom;
   const oy = -camera.y / camera.zoom;
-  if (background === "blank") return;
+  if (background === "blank") {
+    if (darkMode) {
+      ctx.fillStyle = "#0f172a";
+      ctx.fillRect(ox, oy, vw, vh);
+    }
+    return;
+  }
   if (background === "dots") {
     for (let x = Math.floor(ox / step) * step; x < ox + vw; x += step) {
       for (let y = Math.floor(oy / step) * step; y < oy + vh; y += step) {
@@ -244,6 +254,31 @@ export function renderBoardOverlay(ctx: CanvasRenderingContext2D, opts: RenderBo
     ctx.closePath();
     ctx.stroke();
     ctx.setLineDash([]);
+  }
+
+  if (opts.reactions?.length) {
+    ctx.font = `${16 / camera.zoom}px system-ui, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (const r of opts.reactions) {
+      ctx.fillText(r.emoji, r.x, r.y);
+    }
+  }
+  if (opts.comments?.length) {
+    for (const c of opts.comments) {
+      if (!c.pinned) continue;
+      ctx.fillStyle = opts.darkMode ? "#1e293b" : "#ffffff";
+      ctx.strokeStyle = opts.darkMode ? "#64748b" : "#94a3b8";
+      ctx.lineWidth = 1 / camera.zoom;
+      const w = 28 / camera.zoom;
+      const h = 22 / camera.zoom;
+      ctx.fillRect(c.x, c.y, w, h);
+      ctx.strokeRect(c.x, c.y, w, h);
+      ctx.fillStyle = opts.darkMode ? "#e2e8f0" : "#0f172a";
+      ctx.font = `${10 / camera.zoom}px system-ui, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.fillText("💬", c.x + w / 2, c.y + h / 2);
+    }
   }
 
   if (selection && selection.length > 0) {

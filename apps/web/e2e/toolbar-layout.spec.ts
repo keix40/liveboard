@@ -72,7 +72,9 @@ test("HUD does not overlap toolbar tools", async ({ page }) => {
   expect(statusBox).not.toBeNull();
   expect(penBox).not.toBeNull();
   expect(statusBox.y + statusBox.height).toBeLessThanOrEqual(penBox.y + penBox.height + 2);
-  expect(Math.abs(statusBox.y - penBox.y)).toBeLessThanOrEqual(14);
+  const statusCy = statusBox.y + statusBox.height / 2;
+  const penCy = penBox.y + penBox.height / 2;
+  expect(Math.abs(statusCy - penCy)).toBeLessThanOrEqual(4);
 });
 
 test("status pills do not cover export buttons at desktop width", async ({ page }) => {

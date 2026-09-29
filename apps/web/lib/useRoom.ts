@@ -14,7 +14,13 @@ const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:1234";
 /** React binding for a room: connection lifecycle + reactive status and presence. */
 export function useRoom(
   roomId: string,
-  opts?: { role?: RoomRole; boardPassword?: string | null },
+  opts?: {
+    role?: RoomRole;
+    boardPassword?: string | null;
+    editCap?: string;
+    viewCap?: string;
+    legacyOpen?: boolean;
+  },
 ) {
   const [conn, setConn] = useState<RoomConnection | null>(null);
   const [identity, setIdentity] = useState<Identity | null>(null);
@@ -30,7 +36,11 @@ export function useRoom(
       wsUrl: WS_URL,
       role: opts?.role ?? "editor",
       boardPassword: opts?.boardPassword ?? null,
+      editCap: opts?.editCap ?? "",
+      viewCap: opts?.viewCap ?? "",
+      legacyOpen: opts?.legacyOpen ?? true,
       onStatus: setStatus,
+      onRole: setRoomRole,
     });
     const awareness = c.provider.awareness;
     const onChange = () => {
@@ -48,7 +58,7 @@ export function useRoom(
       c.destroy();
       setConn(null);
     };
-  }, [roomId, opts?.role, opts?.boardPassword]);
+  }, [roomId, opts?.role, opts?.boardPassword, opts?.editCap, opts?.viewCap, opts?.legacyOpen]);
 
   return { conn, identity, status, peers, roomRole, setRoomRole };
 }

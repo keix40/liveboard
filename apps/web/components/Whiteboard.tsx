@@ -45,7 +45,7 @@ import { computeContentBounds } from "@/lib/board-bounds";
 import { exportBoardPdf, exportBoardPng } from "@/lib/export-board";
 import { NoteLayer } from "./NoteLayer";
 import { BoardSidePanel } from "./BoardSidePanel";
-import { ensureBoardMeta, readBoardMeta } from "@/lib/board-meta";
+import { ensureBoardMeta, readBoardMeta, writeBoardMeta } from "@/lib/board-meta";
 import { stabilizePoint } from "@/lib/stroke-stabilizer";
 import { recognizeStrokeShape } from "@/lib/shape-recognize";
 import { getAssets, readAsset, type BoardAsset } from "@/lib/assets";
@@ -53,6 +53,9 @@ import { assetDataToBlobUrl } from "@/lib/asset-decode";
 import { cameraForFrame, frameBounds, frameFromViewport } from "@/lib/frames";
 import { isLocked, toggleLock } from "@/lib/locking";
 import { listHistorySnapshots, pushSnapshot, restoreHistorySnapshot } from "@/lib/snapshots";
+import { restorePageSnapshot, type PageSnapshot } from "@/lib/pages";
+import { getComments, type PinnedComment } from "@/lib/comments";
+import { getReactions, type BoardReaction } from "@/lib/reactions";
 
 const STATUS_LABEL: Record<string, string> = {
   connected: "● Connected",
@@ -78,14 +81,23 @@ export function Whiteboard({
   roomId,
   requestedRole = "editor",
   boardPassword = null,
+  editCap = "",
+  viewCap = "",
+  claimBoard = false,
 }: {
   roomId: string;
   requestedRole?: RoomRole;
   boardPassword?: string | null;
+  editCap?: string;
+  viewCap?: string;
+  claimBoard?: boolean;
 }) {
   const { conn, identity, status, peers, roomRole } = useRoom(roomId, {
     role: requestedRole,
     boardPassword,
+    editCap,
+    viewCap,
+    legacyOpen: !editCap,
   });
   const readOnly = roomRole === "viewer";
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -137,7 +149,11 @@ export function Whiteboard({
   const [notesRevision, setNotesRevision] = useState(0);
   const [metaRevision, setMetaRevision] = useState(0);
   const [stabilizer, setStabilizer] = useState(0.35);
-  const [shapeRecognize, setShapeRecognize] = useState(true);
+  const [shapeRecognize, setShapeRecognize] = useState(false);
+  const [historyPreview, setHistoryPreview] = useState<PageSnapshot | null>(null);
+  const previewDocRef = useRef<Y.Doc | null>(null);
+  const strokeHoldStillSinceRef = useRef<number | null>(null);
+  const lastStrokeRawRef = useRef<Point | null>(null);
   const [followPresenter, setFollowPresenter] = useState(false);
   const [isPresenter, setIsPresenter] = useState(false);
   const [assetImages, setAssetImages] = useState<Map<string, CanvasImageSource>>(new Map());
@@ -157,11 +173,12 @@ export function Whiteboard({
   } | null>(null);
 
   const doc = conn?.doc;
+  const renderDoc = historyPreview && previewDocRef.current ? previewDocRef.current : doc;
   const boardMeta = doc ? readBoardMeta(doc) : null;
-  const strokes = useMemo(() => (doc ? getStrokes(doc) : null), [doc]);
-  const shapesMap = useMemo(() => (doc ? getShapes(doc) : null), [doc]);
-  const notesMap = useMemo(() => (doc ? getNotes(doc) : null), [doc]);
-  const assetsMap = useMemo(() => (doc ? getAssets(doc) : null), [doc]);
+  const strokes = useMemo(() => (renderDoc ? getStrokes(renderDoc) : null), [renderDoc, historyPreview]);
+  const shapesMap = useMemo(() => (renderDoc ? getShapes(renderDoc) : null), [renderDoc, historyPreview]);
+  const notesMap = useMemo(() => (renderDoc ? getNotes(renderDoc) : null), [renderDoc, historyPreview]);
+  const assetsMap = useMemo(() => (renderDoc ? getAssets(renderDoc) : null), [renderDoc, historyPreview]);
 
   const undo = useMemo(() => {
     if (!doc || !strokes || !shapesMap || !notesMap || !assetsMap) return null;
@@ -226,10 +243,42 @@ export function Whiteboard({
     [camera],
   );
 
+  const [reactionsRevision, setReactionsRevision] = useState(0);
+  const [commentsRevision, setCommentsRevision] = useState(0);
+
   const buildRenderOpts = useCallback(() => {
     const canvas = canvasRef.current!;
     const dpr = window.devicePixelRatio || 1;
     const strokeList = strokes!.toArray();
+    const reactions: BoardReaction[] = [];
+    const comments: PinnedComment[] = [];
+    if (doc) {
+      getReactions(doc).forEach((m) => {
+        if (m instanceof Y.Map) {
+          reactions.push({
+            id: String(m.get("id")),
+            emoji: String(m.get("emoji")),
+            x: Number(m.get("x")),
+            y: Number(m.get("y")),
+            authorId: String(m.get("authorId")),
+            createdAt: Number(m.get("createdAt")),
+          });
+        }
+      });
+      getComments(doc).forEach((m) => {
+        if (m instanceof Y.Map) {
+          comments.push({
+            id: String(m.get("id")),
+            x: Number(m.get("x")),
+            y: Number(m.get("y")),
+            text: String(m.get("text")),
+            pinned: Boolean(m.get("pinned")),
+            authorId: String(m.get("authorId")),
+            createdAt: Number(m.get("createdAt")),
+          });
+        }
+      });
+    }
     return {
       camera,
       dpr,
@@ -249,6 +298,8 @@ export function Whiteboard({
       darkMode: boardMeta?.darkMode ?? false,
       assets: collectAssetsPlain(),
       assetImages,
+      reactions,
+      comments,
     };
   }, [
     camera,
@@ -263,6 +314,9 @@ export function Whiteboard({
     boardMeta,
     metaRevision,
     assetRevision,
+    doc,
+    reactionsRevision,
+    commentsRevision,
   ]);
 
   const paintFrame = useCallback(
@@ -277,7 +331,8 @@ export function Whiteboard({
       }
       if (repaintBase) compositor.invalidateBase();
       const opts = buildRenderOpts();
-      compositor.paintBase((ctx) => renderBoardBase(ctx, opts));
+      const bg = opts.darkMode ? "#0f172a" : "#f8fafc";
+      compositor.paintBase((ctx) => renderBoardBase(ctx, opts), bg);
       compositor.paintOverlay((ctx) => renderBoardOverlay(ctx, opts));
       compositor.composite();
     },
@@ -327,6 +382,15 @@ export function Whiteboard({
       scheduleFrame(true);
     };
     assetsMap.observe(onAssets);
+    const reactionsMap = doc ? getReactions(doc) : null;
+    const commentsMap = doc ? getComments(doc) : null;
+    const onSocial = () => {
+      setReactionsRevision((n) => n + 1);
+      setCommentsRevision((n) => n + 1);
+      scheduleFrame(true);
+    };
+    reactionsMap?.observe(onSocial);
+    commentsMap?.observe(onSocial);
     const metaMap = doc?.getMap("meta");
     const onMeta = () => setMetaRevision((n) => n + 1);
     if (doc && metaMap) {
@@ -343,9 +407,44 @@ export function Whiteboard({
       shapesMap.unobserve(onShapesChange);
       notesMap.unobserve(onNotesMap);
       assetsMap.unobserve(onAssets);
+      reactionsMap?.unobserve(onSocial);
+      commentsMap?.unobserve(onSocial);
       if (metaMap) metaMap.unobserve(onMeta);
     };
   }, [strokes, shapesMap, notesMap, assetsMap, doc, scheduleFrame]);
+
+  useEffect(() => {
+    if (!doc || !identity) return;
+    ensureBoardMeta(doc, LOCAL_ORIGIN);
+    if (claimBoard && !readBoardMeta(doc).ownerId) {
+      writeBoardMeta(doc, { ownerId: identity.id }, LOCAL_ORIGIN);
+    }
+  }, [doc, identity, claimBoard]);
+
+  useEffect(() => {
+    if (!doc || !historyPreview) {
+      previewDocRef.current?.destroy();
+      previewDocRef.current = null;
+      return;
+    }
+    const d = new Y.Doc();
+    restorePageSnapshot(d, historyPreview);
+    const liveAssets = getAssets(doc);
+    getAssets(d).forEach((m, id) => {
+      if (!(m instanceof Y.Map)) return;
+      const live = liveAssets.get(id);
+      if (live instanceof Y.Map) {
+        const b = live.get("dataBase64");
+        if (typeof b === "string") m.set("dataBase64", b);
+      }
+    });
+    previewDocRef.current = d;
+    scheduleFrame(true);
+    return () => {
+      d.destroy();
+      previewDocRef.current = null;
+    };
+  }, [historyPreview, doc, scheduleFrame]);
 
   useEffect(() => {
     if (!assetsMap) return;
@@ -379,7 +478,7 @@ export function Whiteboard({
     return () => {
       cancelled = true;
     };
-  }, [assetsMap]);
+  }, [assetsMap, assetRevision]);
 
   useEffect(() => {
     if (!doc || readOnly) return;
@@ -733,6 +832,14 @@ export function Whiteboard({
       for (const p of pts) eraseAtWorld(doc, p[0], p[1], size);
     } else {
       for (const raw of pts) {
+        lastStrokeRawRef.current = raw;
+        const prev = strokeHistoryRef.current[strokeHistoryRef.current.length - 1];
+        const moved =
+          !prev ||
+          Math.hypot(raw[0] - prev[0], raw[1] - prev[1]) >
+            2 / Math.max(camera.zoom, 0.25);
+        if (moved) strokeHoldStillSinceRef.current = null;
+        else if (strokeHoldStillSinceRef.current == null) strokeHoldStillSinceRef.current = Date.now();
         const p = stabilizePoint(strokeHistoryRef.current, raw, stabilizer);
         strokeHistoryRef.current.push(p);
         pointBatcher.current?.push(p);
@@ -819,6 +926,13 @@ export function Whiteboard({
     }
 
     if (wasStroke) {
+      const r = canvasRef.current?.getBoundingClientRect();
+      if (r && drawing.current && tool !== "eraser") {
+        const w = screenToWorld(camera, e.clientX - r.left, e.clientY - r.top);
+        const rawEnd: Point = [w.x, w.y, e.pressure || 0.5];
+        lastStrokeRawRef.current = rawEnd;
+        pointBatcher.current?.push(rawEnd);
+      }
       pointBatcher.current?.flush();
       pointBatcher.current?.dispose();
       pointBatcher.current = null;
@@ -827,7 +941,11 @@ export function Whiteboard({
       strokePointerIdRef.current = null;
       localLiveStrokeIndexRef.current = null;
       strokeHistoryRef.current = [];
-      if (shapeRecognize && doc && identity && strokes && pointsArr) {
+      const heldStill =
+        strokeHoldStillSinceRef.current != null &&
+        Date.now() - strokeHoldStillSinceRef.current >= 500;
+      strokeHoldStillSinceRef.current = null;
+      if (shapeRecognize && heldStill && doc && identity && strokes && pointsArr) {
         const last = strokes.get(strokes.length - 1);
         if (last) {
           const s = readStroke(last);
@@ -879,6 +997,7 @@ export function Whiteboard({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (readOnly) return;
       if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z") return;
       e.preventDefault();
       if (e.shiftKey) undo?.redo();
@@ -886,17 +1005,26 @@ export function Whiteboard({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo]);
+  }, [undo, readOnly]);
 
   const clear = () => {
-    if (!doc || !strokes) return;
+    if (!doc || !strokes || readOnly) return;
     if (!confirm("Clear the board for everyone? (Undo restores it)")) return;
     beginAction();
     doc.transact(() => {
-      strokes.delete(0, strokes.length);
-      shapesMap?.forEach((_, k) => shapesMap.delete(k));
-      notesMap?.forEach((_, k) => notesMap.delete(k));
-      assetsMap?.forEach((_, k) => assetsMap.delete(k));
+      for (let i = strokes.length - 1; i >= 0; i--) {
+        const s = readStroke(strokes.get(i)!);
+        if (!isLocked(doc, s.id)) strokes.delete(i, 1);
+      }
+      shapesMap?.forEach((_, k) => {
+        if (!isLocked(doc, k)) shapesMap.delete(k);
+      });
+      notesMap?.forEach((_, k) => {
+        if (!isLocked(doc, k)) notesMap.delete(k);
+      });
+      assetsMap?.forEach((_, k) => {
+        if (!isLocked(doc, k)) assetsMap.delete(k);
+      });
     }, LOCAL_ORIGIN);
     setSelection([]);
   };
@@ -1000,6 +1128,7 @@ export function Whiteboard({
           size={size}
           zoom={camera.zoom}
           compact={compactToolbar}
+          readOnly={readOnly}
           statusChip={
             compactToolbar ? (
               <>
@@ -1103,7 +1232,10 @@ export function Whiteboard({
             onPresenter={setIsPresenter}
             className={compactToolbar && !sidePanelOpen ? "collapsed" : undefined}
             history={listHistorySnapshots(doc)}
+            onHistoryPreview={(snap) => setHistoryPreview(snap)}
+            onClearHistoryPreview={() => setHistoryPreview(null)}
             onRestoreSnapshot={(snap) => {
+              setHistoryPreview(null);
               beginAction();
               restoreHistorySnapshot(doc, snap);
               setAssetRevision((n) => n + 1);
@@ -1123,7 +1255,8 @@ export function Whiteboard({
             onGoToFrame={goToFrame}
             onExportFrame={exportFrame}
             onToggleLockSelection={() => {
-              for (const sel of selection) toggleLock(doc, sel.id);
+              const uid = identity?.id ?? "";
+              for (const sel of selection) toggleLock(doc, sel.id, uid);
               setMetaRevision((n) => n + 1);
             }}
             hasSelection={selection.length > 0}

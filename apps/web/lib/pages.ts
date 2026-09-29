@@ -1,6 +1,6 @@
 import * as Y from "yjs";
 import { YKEYS } from "@liveboard/shared";
-import { getAssets } from "./assets";
+import { getAssets, readAsset } from "./assets";
 import { getNotes } from "./notes";
 import { getShapes } from "./shapes";
 import { getStrokes, LOCAL_ORIGIN } from "./strokes";
@@ -17,11 +17,26 @@ export function getPageSnapshots(doc: Y.Doc): Y.Map<unknown> {
 }
 
 export function capturePageSnapshot(doc: Y.Doc): PageSnapshot {
+  const assetLayouts: Record<string, unknown> = {};
+  getAssets(doc).forEach((m, id) => {
+    const a = readAsset(m);
+    assetLayouts[id] = {
+      id: a.id,
+      x: a.x,
+      y: a.y,
+      w: a.w,
+      h: a.h,
+      locked: a.locked,
+      z: a.z,
+      authorId: a.authorId,
+      mime: a.mime,
+    };
+  });
   return {
     strokes: getStrokes(doc).toJSON(),
     shapes: getShapes(doc).toJSON(),
     notes: getNotes(doc).toJSON(),
-    assets: getAssets(doc).toJSON(),
+    assets: assetLayouts,
   };
 }
 
@@ -51,6 +66,16 @@ function restoreMap(
   map.forEach((_, k) => map.delete(k));
   const entries = (data && typeof data === "object" ? data : {}) as Record<string, Record<string, unknown>>;
   for (const [id, row] of Object.entries(entries)) {
+    if (key === YKEYS.assets) {
+      const assetMap = map as Y.Map<Y.Map<unknown>>;
+      const existing = assetMap.get(id);
+      const m = existing instanceof Y.Map ? existing : new Y.Map<unknown>();
+      for (const [k, v] of Object.entries(row)) {
+        if (k !== "dataBase64") m.set(k, v);
+      }
+      if (!existing) assetMap.set(id, m);
+      continue;
+    }
     const m = new Y.Map<unknown>();
     for (const [k, v] of Object.entries(row)) {
       if (k === "text") {
@@ -71,14 +96,24 @@ export function restorePageSnapshot(doc: Y.Doc, snap: PageSnapshot): void {
   }, LOCAL_ORIGIN);
 }
 
+/** Saves current page to shared snapshots and loads another (syncs to all peers). */
 export function switchPage(doc: Y.Doc, fromId: string, toId: string): void {
   const snaps = getPageSnapshots(doc);
   doc.transact(() => {
     snaps.set(fromId, JSON.stringify(capturePageSnapshot(doc)));
-    const raw = snaps.get(toId);
-    const snap = raw
-      ? (JSON.parse(String(raw)) as PageSnapshot)
-      : { strokes: [], shapes: {}, notes: {}, assets: {} };
-    restorePageSnapshot(doc, snap);
+    loadPageContent(doc, toId);
   }, LOCAL_ORIGIN);
+}
+
+/** Loads a page snapshot locally without writing the current page back (per-user navigation). */
+export function switchPageLocal(doc: Y.Doc, toId: string): void {
+  doc.transact(() => loadPageContent(doc, toId), LOCAL_ORIGIN);
+}
+
+function loadPageContent(doc: Y.Doc, toId: string): void {
+  const raw = getPageSnapshots(doc).get(toId);
+  const snap = raw
+    ? (JSON.parse(String(raw)) as PageSnapshot)
+    : { strokes: [], shapes: {}, notes: {}, assets: {} };
+  restorePageSnapshot(doc, snap);
 }

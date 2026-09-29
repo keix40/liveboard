@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type * as Y from "yjs";
 import type { BoardBackground, BoardTemplate, RoomRole } from "@liveboard/shared";
 import { writeBoardMeta, type BoardMeta } from "@/lib/board-meta";
-import { switchPage, type PageSnapshot } from "@/lib/pages";
+import { switchPage, switchPageLocal, type PageSnapshot } from "@/lib/pages";
 import { pushSnapshot, type HistorySnapshot } from "@/lib/snapshots";
 import { applyTemplate } from "@/lib/templates";
 import { compressToBase64, upsertAsset } from "@/lib/assets";
@@ -31,6 +31,8 @@ interface Props {
   onPresenter(v: boolean): void;
   className?: string;
   history: HistorySnapshot[];
+  onHistoryPreview(snap: PageSnapshot): void;
+  onClearHistoryPreview(): void;
   onRestoreSnapshot(snap: PageSnapshot): void;
   onAddFrame(): void;
   onGoToFrame(id: string): void;
@@ -85,9 +87,16 @@ export function BoardSidePanel(p: Props) {
     p.onMetaRevision();
   };
 
+  const previewAt = (index: number) => {
+    const snap = p.history[index];
+    if (!snap) return;
+    p.onHistoryPreview(snap.page);
+  };
+
   const restoreAt = (index: number) => {
     const snap = p.history[index];
     if (!snap) return;
+    p.onClearHistoryPreview();
     p.onRestoreSnapshot(snap.page);
   };
 
@@ -166,8 +175,13 @@ export function BoardSidePanel(p: Props) {
           value={p.meta.activePageId}
           onChange={(e) => {
             const next = e.target.value;
-            switchPage(p.doc, p.meta.activePageId, next);
-            patchMeta({ activePageId: next });
+            if (p.isPresenter) {
+              switchPage(p.doc, p.meta.activePageId, next);
+              patchMeta({ activePageId: next });
+            } else {
+              switchPageLocal(p.doc, next);
+              patchMeta({ activePageId: next });
+            }
           }}
         >
           {p.meta.pageOrder.map((id) => (
@@ -209,7 +223,7 @@ export function BoardSidePanel(p: Props) {
             onChange={(e) => {
               const idx = Number(e.target.value);
               setScrubIndex(idx);
-              restoreAt(idx);
+              previewAt(idx);
             }}
           />
         </label>
@@ -233,7 +247,7 @@ export function BoardSidePanel(p: Props) {
             }
             let idx = 0;
             playRef.current = setInterval(() => {
-              restoreAt(idx);
+              previewAt(idx);
               setScrubIndex(idx);
               idx = (idx + 1) % p.history.length;
             }, 600);
@@ -251,7 +265,7 @@ export function BoardSidePanel(p: Props) {
               disabled={p.readOnly}
               onClick={() => {
                 setScrubIndex(i);
-                restoreAt(i);
+                previewAt(i);
               }}
             >
               {h.label}

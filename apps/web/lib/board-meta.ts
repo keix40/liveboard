@@ -16,6 +16,8 @@ export interface BoardMeta {
   pageOrder: string[];
   boardPassword: string | null;
   lockedIds: string[];
+  lockOwners: Record<string, string>;
+  ownerId: string | null;
   frames: BoardFrame[];
 }
 
@@ -28,6 +30,8 @@ const DEFAULT: BoardMeta = {
   pageOrder: ["page-1"],
   boardPassword: null,
   lockedIds: [],
+  lockOwners: {},
+  ownerId: null,
   frames: [],
 };
 
@@ -47,6 +51,11 @@ export function readBoardMeta(doc: Y.Doc): BoardMeta {
     pageOrder: Array.isArray(pageOrderRaw) ? (pageOrderRaw as string[]) : [...DEFAULT.pageOrder],
     boardPassword: m.get("boardPassword") != null ? String(m.get("boardPassword")) : null,
     lockedIds: Array.isArray(m.get("lockedIds")) ? (m.get("lockedIds") as string[]) : [],
+    lockOwners:
+      m.get("lockOwners") && typeof m.get("lockOwners") === "object"
+        ? (m.get("lockOwners") as Record<string, string>)
+        : {},
+    ownerId: m.get("ownerId") != null ? String(m.get("ownerId")) : null,
     frames: Array.isArray(m.get("frames")) ? (m.get("frames") as BoardFrame[]) : [],
   };
 }
@@ -64,7 +73,12 @@ export function writeBoardMeta(doc: Y.Doc, patch: Partial<BoardMeta>, origin: sy
       if (patch.boardPassword) m.set("boardPassword", patch.boardPassword);
       else m.delete("boardPassword");
     }
-    if (patch.lockedIds != null) m.set("lockedIds", patch.lockedIds);
+    if (patch.lockedIds != null) m.set("lockedIds", patch.lockedIds.slice(0, 500));
+    if (patch.lockOwners != null) m.set("lockOwners", patch.lockOwners);
+    if (patch.ownerId !== undefined) {
+      if (patch.ownerId) m.set("ownerId", patch.ownerId);
+      else m.delete("ownerId");
+    }
     if (patch.frames != null) m.set("frames", patch.frames);
   }, origin);
 }

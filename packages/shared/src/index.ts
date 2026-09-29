@@ -28,6 +28,12 @@ export const YKEYS = {
 /** Per-asset binary budget (compressed base64 in Yjs). See docs/ASSET_LIMITS.md */
 export const ASSET_MAX_BYTES = 200_000;
 export const ASSET_ROOM_MAX_BYTES = 600_000;
+export const ASSET_MAX_DECOMPRESSED_BYTES = 400_000;
+export const ASSET_MAX_IMAGE_DIMENSION = 4096;
+export const PDF_MAX_BYTES = 2_000_000;
+export const PDF_MAX_PAGES = 10;
+
+export const MAX_LOCKED_IDS = 500;
 
 export type BoardBackground = "blank" | "grid" | "dots" | "lined";
 export type BoardTemplate = "none" | "kanban" | "mindmap" | "wireframe" | "retro";
