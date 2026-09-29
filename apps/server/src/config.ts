@@ -24,8 +24,10 @@ export interface ServerConfig {
   instanceId: string;
   jwtSecret: string;
   allowedOrigins: string[];
-  persistence: "memory" | "postgres";
+  persistence: "memory" | "postgres" | "file";
   databaseUrl?: string;
+  /** Directory for PERSISTENCE=file (default ./data/liveboard). */
+  dataDir?: string;
   redisUrl?: string;
   compactEveryNUpdates: number;
   rateLimit: { msgsPerSec: number; burst: number };
@@ -52,6 +54,7 @@ export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
       .filter(Boolean),
     persistence,
     databaseUrl: process.env.DATABASE_URL || undefined,
+    dataDir: process.env.DATA_DIR || "./data/liveboard",
     redisUrl: process.env.REDIS_URL || undefined,
     compactEveryNUpdates: int("COMPACT_EVERY_N_UPDATES", 500),
     rateLimit: {
@@ -70,11 +73,14 @@ export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
   if (cfg.jwtSecret.length < 32) {
     throw new Error("LIVEBOARD_JWT_SECRET must be set and at least 32 characters long");
   }
-  if (!["memory", "postgres"].includes(cfg.persistence)) {
-    throw new Error(`PERSISTENCE must be "memory" or "postgres", got "${cfg.persistence}"`);
+  if (!["memory", "postgres", "file"].includes(cfg.persistence)) {
+    throw new Error(`PERSISTENCE must be "memory", "file", or "postgres", got "${cfg.persistence}"`);
   }
   if (cfg.persistence === "postgres" && !cfg.databaseUrl) {
     throw new Error("DATABASE_URL is required when PERSISTENCE=postgres");
+  }
+  if (cfg.persistence === "file" && !cfg.dataDir) {
+    throw new Error("DATA_DIR is required when PERSISTENCE=file");
   }
   return cfg;
 }

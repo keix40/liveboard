@@ -1,6 +1,6 @@
 import * as Y from "yjs";
 import { getStroke } from "perfect-freehand";
-import { YKEYS, type Point, type StrokeField } from "@liveboard/shared";
+import { YKEYS, type Point, type StrokeField, type StrokeVariant } from "@liveboard/shared";
 
 /**
  * Freehand strokes live in doc.getArray("strokes") as Y.Map entries:
@@ -24,7 +24,14 @@ export function flatToPoints(flat: ArrayLike<number>): Point[] {
 
 export function beginStroke(
   doc: Y.Doc,
-  opts: { id: string; authorId: string; color: string; size: number; first: Point },
+  opts: {
+    id: string;
+    authorId: string;
+    color: string;
+    size: number;
+    variant?: StrokeVariant;
+    first: Point;
+  },
 ): Y.Array<number> {
   const points = new Y.Array<number>();
   const stroke = new Y.Map<unknown>();
@@ -34,6 +41,7 @@ export function beginStroke(
       ["authorId", opts.authorId],
       ["color", opts.color],
       ["size", opts.size],
+      ["variant", opts.variant ?? "pen"],
       ["createdAt", Date.now()],
       ["points", points],
     ];
@@ -50,19 +58,21 @@ export function extendStroke(doc: Y.Doc, points: Y.Array<number>, p: Point): voi
 
 export function readStroke(s: YStroke) {
   const pts = s.get("points");
+  const variantRaw = s.get("variant");
   return {
     id: String(s.get("id")),
     color: String(s.get("color") ?? "#0f172a"),
     size: Number(s.get("size") ?? 6),
+    variant: (variantRaw === "highlighter" ? "highlighter" : "pen") as StrokeVariant,
     points: pts instanceof Y.Array ? flatToPoints(pts.toArray() as number[]) : [],
   };
 }
 
 /** perfect-freehand outline -> SVG path data (usable with new Path2D(d)). */
-export function strokePath(points: Point[], size: number): string {
+export function strokePath(points: Point[], size: number, variant: StrokeVariant = "pen"): string {
   const outline = getStroke(points, {
-    size,
-    thinning: 0.5,
+    size: variant === "highlighter" ? size * 1.4 : size,
+    thinning: variant === "highlighter" ? 0.2 : 0.5,
     smoothing: 0.5,
     streamline: 0.5,
     simulatePressure: points.every((p) => p[2] === 0.5),
@@ -99,7 +109,7 @@ export function eraseAt(doc: Y.Doc, x: number, y: number, radius: number): numbe
   let removed = 0;
   doc.transact(() => {
     for (let i = strokes.length - 1; i >= 0; i--) {
-      const s = readStroke(strokes.get(i));
+      const s = readStroke(strokes.get(i)!);
       if (hitStroke(s.points, x, y, radius + s.size / 2)) {
         strokes.delete(i, 1);
         removed++;
@@ -107,4 +117,13 @@ export function eraseAt(doc: Y.Doc, x: number, y: number, radius: number): numbe
     }
   }, LOCAL_ORIGIN);
   return removed;
+}
+
+export function deleteStrokeById(doc: Y.Doc, id: string): void {
+  const strokes = getStrokes(doc);
+  doc.transact(() => {
+    for (let i = strokes.length - 1; i >= 0; i--) {
+      if (readStroke(strokes.get(i)!).id === id) strokes.delete(i, 1);
+    }
+  }, LOCAL_ORIGIN);
 }

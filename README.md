@@ -171,7 +171,8 @@ Open the same room on :3000 and :3001. Each window talks to a different server, 
 | `NEXT_PUBLIC_WS_URL` | web | `ws://localhost:1234` | Public sync-server URL (`wss://…onrender.com` in prod). |
 | `PORT` | server | `1234` | Listen port (Render injects this). |
 | `ALLOWED_ORIGINS` | server | *(empty = any)* | Comma-separated browser origins allowed to open sockets. |
-| `PERSISTENCE` | server | `memory` | `memory` or `postgres`. |
+| `PERSISTENCE` | server | `memory` | `memory`, `file`, or `postgres`. |
+| `DATA_DIR` | server | `./data/liveboard` | Board files when `PERSISTENCE=file`. |
 | `DATABASE_URL` | server | none | Postgres connection string (required for `postgres`). |
 | `REDIS_URL` | server | *(unset)* | Enables cross-instance pub/sub when set. |
 | `COMPACT_EVERY_N_UPDATES` | server | `500` | Fold the update log into a snapshot after N updates. |

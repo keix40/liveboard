@@ -1,0 +1,72 @@
+import * as Y from "yjs";
+import { YKEYS, type Shape, type ShapeField, type ShapeKind } from "@liveboard/shared";
+import { LOCAL_ORIGIN } from "./strokes";
+
+export type YShape = Y.Map<unknown>;
+
+export function getShapes(doc: Y.Doc): Y.Map<YShape> {
+  return doc.getMap(YKEYS.shapes);
+}
+
+export function readShape(m: YShape): Shape {
+  return {
+    id: String(m.get("id")),
+    kind: m.get("kind") as ShapeKind,
+    x: Number(m.get("x") ?? 0),
+    y: Number(m.get("y") ?? 0),
+    w: Number(m.get("w") ?? 0),
+    h: Number(m.get("h") ?? 0),
+    rotation: Number(m.get("rotation") ?? 0),
+    stroke: String(m.get("stroke") ?? "#0f172a"),
+    fill: m.get("fill") == null ? null : String(m.get("fill")),
+    strokeWidth: Number(m.get("strokeWidth") ?? 2),
+    text: m.get("text") != null ? String(m.get("text")) : undefined,
+    z: Number(m.get("z") ?? 0),
+    authorId: String(m.get("authorId") ?? ""),
+    createdAt: Number(m.get("createdAt") ?? 0),
+  };
+}
+
+export function upsertShape(doc: Y.Doc, shape: Shape): YShape {
+  const map = getShapes(doc);
+  let entry = map.get(shape.id);
+  if (!(entry instanceof Y.Map)) {
+    entry = new Y.Map();
+    map.set(shape.id, entry);
+  }
+  doc.transact(() => {
+    const fields: [ShapeField, unknown][] = [
+      ["id", shape.id],
+      ["kind", shape.kind],
+      ["x", shape.x],
+      ["y", shape.y],
+      ["w", shape.w],
+      ["h", shape.h],
+      ["rotation", shape.rotation],
+      ["stroke", shape.stroke],
+      ["fill", shape.fill],
+      ["strokeWidth", shape.strokeWidth],
+      ["z", shape.z],
+      ["authorId", shape.authorId],
+      ["createdAt", shape.createdAt],
+    ];
+    if (shape.text !== undefined) fields.push(["text", shape.text]);
+    for (const [k, v] of fields) entry!.set(k, v);
+  }, LOCAL_ORIGIN);
+  return entry!;
+}
+
+export function deleteShape(doc: Y.Doc, id: string): void {
+  doc.transact(() => getShapes(doc).delete(id), LOCAL_ORIGIN);
+}
+
+export function shapeBounds(s: Shape): { minX: number; minY: number; maxX: number; maxY: number } {
+  const xs = [s.x, s.x + s.w];
+  const ys = [s.y, s.y + s.h];
+  return { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) };
+}
+
+export function hitShape(s: Shape, wx: number, wy: number, pad = 6): boolean {
+  const b = shapeBounds(s);
+  return wx >= b.minX - pad && wx <= b.maxX + pad && wy >= b.minY - pad && wy <= b.maxY + pad;
+}

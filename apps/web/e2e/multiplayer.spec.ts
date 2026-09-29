@@ -3,12 +3,17 @@ import { test, expect, type Page } from "@playwright/test";
 async function drawStroke(page: Page, from: [number, number], to: [number, number]) {
   const canvas = page.getByTestId("board-canvas");
   const box = (await canvas.boundingBox())!;
-  await page.mouse.move(box.x + from[0], box.y + from[1]);
-  await page.mouse.down();
+  const x0 = box.x + from[0];
+  const y0 = box.y + from[1];
+  await canvas.dispatchEvent("pointerdown", { pointerId: 1, pointerType: "mouse", button: 0, clientX: x0, clientY: y0 });
   for (let i = 1; i <= 10; i++) {
-    await page.mouse.move(box.x + from[0] + ((to[0] - from[0]) * i) / 10, box.y + from[1] + ((to[1] - from[1]) * i) / 10);
+    const x = box.x + from[0] + ((to[0] - from[0]) * i) / 10;
+    const y = box.y + from[1] + ((to[1] - from[1]) * i) / 10;
+    await canvas.dispatchEvent("pointermove", { pointerId: 1, pointerType: "mouse", clientX: x, clientY: y });
   }
-  await page.mouse.up();
+  const x1 = box.x + to[0];
+  const y1 = box.y + to[1];
+  await canvas.dispatchEvent("pointerup", { pointerId: 1, pointerType: "mouse", button: 0, clientX: x1, clientY: y1 });
 }
 
 test("a stroke drawn in one browser appears in another", async ({ browser }) => {

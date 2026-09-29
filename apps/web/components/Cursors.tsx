@@ -1,17 +1,21 @@
 "use client";
 
 import type { Peer } from "@/lib/useRoom";
+import type { Camera } from "@/lib/camera";
+import { worldToScreen } from "@/lib/camera";
 
-/** Remote cursors from the awareness protocol, rendered as absolutely positioned DOM nodes. */
-export function Cursors({ peers }: { peers: Peer[] }) {
+/** Remote cursors from the awareness protocol (world coordinates → screen). */
+export function Cursors({ peers, camera }: { peers: Peer[]; camera: Camera }) {
   return (
     <>
-      {peers.map((p) =>
-        p.cursor ? (
+      {peers.map((p) => {
+        if (!p.cursor) return null;
+        const { x, y } = worldToScreen(camera, p.cursor.x, p.cursor.y);
+        return (
           <div
             key={p.clientId}
             className="cursor"
-            style={{ transform: `translate(${p.cursor.x}px, ${p.cursor.y}px)` }}
+            style={{ transform: `translate(${x}px, ${y}px)` }}
             aria-hidden
           >
             <svg width="18" height="18" viewBox="0 0 18 18">
@@ -21,8 +25,8 @@ export function Cursors({ peers }: { peers: Peer[] }) {
               {p.user.name}
             </span>
           </div>
-        ) : null,
-      )}
+        );
+      })}
     </>
   );
 }
