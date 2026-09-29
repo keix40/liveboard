@@ -10,7 +10,7 @@
  *   └── "meta"    : Y.Map<unknown>                board title, createdAt, schemaVersion
  */
 
-export const DOC_SCHEMA_VERSION = 1;
+export const DOC_SCHEMA_VERSION = 2;
 
 /** Top-level shared type names inside the Y.Doc. */
 export const YKEYS = {
@@ -18,7 +18,19 @@ export const YKEYS = {
   shapes: "shapes",
   notes: "notes",
   meta: "meta",
+  pageSnapshots: "pageSnapshots",
+  assets: "assets",
+  snapshots: "snapshots",
+  comments: "comments",
+  reactions: "reactions",
 } as const;
+
+/** Per-asset binary budget (compressed base64 in Yjs). See docs/ASSET_LIMITS.md */
+export const ASSET_MAX_BYTES = 200_000;
+export const ASSET_ROOM_MAX_BYTES = 600_000;
+
+export type BoardBackground = "blank" | "grid" | "dots" | "lined";
+export type BoardTemplate = "none" | "kanban" | "mindmap" | "wireframe" | "retro";
 
 /** y-websocket-compatible top-level message types (first varUint of every frame). */
 export const MessageType = {
@@ -134,6 +146,9 @@ export interface AwarenessState {
   tool?: Tool;
   /** Ids of objects currently selected by this user (for remote selection outlines). */
   selection?: string[];
+  /** Presenter camera broadcast (presenter mode). */
+  camera?: { x: number; y: number; zoom: number };
+  presenter?: boolean;
 }
 
 // ─── Auth ─────────────────────────────────────────────────────────────────

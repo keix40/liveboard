@@ -1,9 +1,9 @@
 import { notFound } from "next/navigation";
 import { isValidRoomId } from "@liveboard/shared";
-import { Whiteboard } from "@/components/Whiteboard";
+import { BoardClient } from "@/components/BoardClient";
 
 export default async function BoardPage({ params }: { params: Promise<{ roomId: string }> }) {
   const { roomId } = await params;
   if (!isValidRoomId(roomId)) notFound();
-  return <Whiteboard roomId={roomId} />;
+  return <BoardClient roomId={roomId} />;
 }

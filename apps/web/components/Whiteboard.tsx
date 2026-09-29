@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
-import type { Point, ShapeKind } from "@liveboard/shared";
+import type { Point, RoomRole, ShapeKind } from "@liveboard/shared";
 import { useRoom } from "@/lib/useRoom";
 import {
   beginStroke,
@@ -44,6 +44,11 @@ import { lassoSelect, pickAt, type SelectableRef } from "@/lib/selection";
 import { computeContentBounds } from "@/lib/board-bounds";
 import { exportBoardPdf, exportBoardPng } from "@/lib/export-board";
 import { NoteLayer } from "./NoteLayer";
+import { BoardSidePanel } from "./BoardSidePanel";
+import { ensureBoardMeta, readBoardMeta } from "@/lib/board-meta";
+import { stabilizePoint } from "@/lib/stroke-stabilizer";
+import { recognizeStrokeShape } from "@/lib/shape-recognize";
+import { isLocked } from "@/lib/locking";
 
 const STATUS_LABEL: Record<string, string> = {
   connected: "● Connected",
@@ -65,8 +70,20 @@ function isPanGesture(tool: DrawTool, pointerType: string, touchCount: number): 
   return false;
 }
 
-export function Whiteboard({ roomId }: { roomId: string }) {
-  const { conn, identity, status, peers } = useRoom(roomId);
+export function Whiteboard({
+  roomId,
+  requestedRole = "editor",
+  boardPassword = null,
+}: {
+  roomId: string;
+  requestedRole?: RoomRole;
+  boardPassword?: string | null;
+}) {
+  const { conn, identity, status, peers, roomRole } = useRoom(roomId, {
+    role: requestedRole,
+    boardPassword,
+  });
+  const readOnly = roomRole === "viewer";
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const canvasInstanceId = useRef(`canvas-${crypto.randomUUID()}`);
   const compositorRef = useRef<BoardCompositor | null>(null);
@@ -114,6 +131,12 @@ export function Whiteboard({ roomId }: { roomId: string }) {
   const [chromeHeight, setChromeHeight] = useState(120);
   const [compactToolbar, setCompactToolbar] = useState(false);
   const [notesRevision, setNotesRevision] = useState(0);
+  const [metaRevision, setMetaRevision] = useState(0);
+  const [stabilizer, setStabilizer] = useState(0.35);
+  const [shapeRecognize, setShapeRecognize] = useState(true);
+  const [followPresenter, setFollowPresenter] = useState(false);
+  const [isPresenter, setIsPresenter] = useState(false);
+  const strokeHistoryRef = useRef<Point[]>([]);
   const [previewShape, setPreviewShape] = useState<{
     kind: string;
     x: number;
@@ -125,6 +148,7 @@ export function Whiteboard({ roomId }: { roomId: string }) {
   } | null>(null);
 
   const doc = conn?.doc;
+  const boardMeta = doc ? readBoardMeta(doc) : null;
   const strokes = useMemo(() => (doc ? getStrokes(doc) : null), [doc]);
   const shapesMap = useMemo(() => (doc ? getShapes(doc) : null), [doc]);
   const notesMap = useMemo(() => (doc ? getNotes(doc) : null), [doc]);
@@ -199,8 +223,10 @@ export function Whiteboard({ roomId }: { roomId: string }) {
         localLiveStrokeIndexRef.current != null ? [localLiveStrokeIndexRef.current] : undefined,
       excludeStrokeIndicesFromBase:
         localLiveStrokeIndexRef.current != null ? [localLiveStrokeIndexRef.current] : undefined,
+      background: boardMeta?.background ?? "grid",
+      darkMode: boardMeta?.darkMode ?? false,
     };
-  }, [camera, strokes, collectShapes, collectNotes, selection, lassoPath, previewShape]);
+  }, [camera, strokes, collectShapes, collectNotes, selection, lassoPath, previewShape, boardMeta, metaRevision]);
 
   const paintFrame = useCallback(
     (repaintBase: boolean) => {
@@ -259,6 +285,12 @@ export function Whiteboard({ roomId }: { roomId: string }) {
     shapesMap.observe(onStructure);
     shapesMap.observe(onShapesChange);
     notesMap.observe(onNotesMap);
+    const metaMap = doc?.getMap("meta");
+    const onMeta = () => setMetaRevision((n) => n + 1);
+    if (doc && metaMap) {
+      metaMap.observe(onMeta);
+      ensureBoardMeta(doc, LOCAL_ORIGIN);
+    }
     setStrokeCount(strokes.length);
     setShapeCount(shapesMap.size);
     setNotesRevision((n) => n + 1);
@@ -269,8 +301,9 @@ export function Whiteboard({ roomId }: { roomId: string }) {
       shapesMap.unobserve(onStructure);
       shapesMap.unobserve(onShapesChange);
       notesMap.unobserve(onNotesMap);
+      if (metaMap) metaMap.unobserve(onMeta);
     };
-  }, [strokes, shapesMap, notesMap, scheduleFrame]);
+  }, [strokes, shapesMap, notesMap, doc, scheduleFrame]);
 
   useEffect(() => {
     scheduleFrame(true);
@@ -289,6 +322,19 @@ export function Whiteboard({ roomId }: { roomId: string }) {
     if (!awareness) return;
     awareness.setLocalStateField("tool", tool);
   }, [conn, tool]);
+
+  useEffect(() => {
+    const awareness = conn?.provider.awareness;
+    if (!awareness) return;
+    awareness.setLocalStateField("presenter", isPresenter);
+    if (isPresenter) awareness.setLocalStateField("camera", camera);
+  }, [conn, isPresenter, camera]);
+
+  useEffect(() => {
+    if (!followPresenter || !conn) return;
+    const presenter = peers.find((p) => p.presenter && p.camera);
+    if (presenter?.camera) setCamera(presenter.camera);
+  }, [conn, followPresenter, peers]);
 
   const setCursorWorld = (world: { x: number; y: number } | null) => {
     const awareness = conn?.provider.awareness;
@@ -353,6 +399,7 @@ export function Whiteboard({ roomId }: { roomId: string }) {
 
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!doc || !identity || status === "unauthorized" || status === "connect-failed") return;
+    if (readOnly) return;
     if (e.button !== 0 && e.pointerType === "mouse") return;
 
     const canvas = e.currentTarget;
@@ -485,6 +532,7 @@ export function Whiteboard({ roomId }: { roomId: string }) {
         gesturePointerIdRef.current = e.pointerId;
         return;
       }
+      strokeHistoryRef.current = [];
       startPenStroke(e.pointerId, world, e.pressure || 0.5);
     }
   };
@@ -589,7 +637,11 @@ export function Whiteboard({ roomId }: { roomId: string }) {
     if (tool === "eraser") {
       for (const p of pts) eraseAtWorld(doc, p[0], p[1], size);
     } else {
-      for (const p of pts) pointBatcher.current?.push(p);
+      for (const raw of pts) {
+        const p = stabilizePoint(strokeHistoryRef.current, raw, stabilizer);
+        strokeHistoryRef.current.push(p);
+        pointBatcher.current?.push(p);
+      }
     }
   };
 
@@ -669,9 +721,38 @@ export function Whiteboard({ roomId }: { roomId: string }) {
       pointBatcher.current?.flush();
       pointBatcher.current?.dispose();
       pointBatcher.current = null;
+      const pointsArr = drawing.current;
       drawing.current = null;
       strokePointerIdRef.current = null;
       localLiveStrokeIndexRef.current = null;
+      strokeHistoryRef.current = [];
+      if (shapeRecognize && doc && identity && strokes && pointsArr) {
+        const last = strokes.get(strokes.length - 1);
+        if (last) {
+          const s = readStroke(last);
+          if (!isLocked(doc, s.id)) {
+            const recognized = recognizeStrokeShape(s.points);
+            if (recognized && recognized.confidence > 0.75 && s.points.length >= 12) {
+              deleteStrokeById(doc, s.id);
+              upsertShape(doc, {
+                id: crypto.randomUUID(),
+                kind: recognized.kind,
+                x: recognized.x,
+                y: recognized.y,
+                w: recognized.w,
+                h: recognized.h,
+                rotation: 0,
+                stroke: color,
+                fill: recognized.kind === "rect" || recognized.kind === "ellipse" ? `${color}22` : null,
+                strokeWidth: size,
+                z: nextZ(),
+                authorId: identity.id,
+                createdAt: Date.now(),
+              });
+            }
+          }
+        }
+      }
       scheduleFrame(true);
     }
   };
@@ -769,7 +850,7 @@ export function Whiteboard({ roomId }: { roomId: string }) {
     tool === "eraser" ? "cell" : tool === "pan" ? "grab" : tool === "select" ? "default" : "crosshair";
 
   return (
-    <div className="board">
+    <div className={`board${boardMeta?.darkMode ? " dark" : ""}`} data-testid="board-root">
       <header className="board-chrome" ref={chromeRef} data-testid="board-chrome">
         {!compactToolbar ? (
           <div className="board-hud hud">
@@ -842,6 +923,7 @@ export function Whiteboard({ roomId }: { roomId: string }) {
         />
       </header>
       <div className="board-surface">
+        <div className="board-surface-main">
         <canvas
           ref={canvasRef}
           data-testid="board-canvas"
@@ -867,6 +949,26 @@ export function Whiteboard({ roomId }: { roomId: string }) {
           />
         ) : null}
         <Cursors peers={peers} camera={camera} />
+        </div>
+        {doc && boardMeta ? (
+          <BoardSidePanel
+            doc={doc}
+            meta={boardMeta}
+            metaRevision={metaRevision}
+            onMetaRevision={() => setMetaRevision((n) => n + 1)}
+            stabilizer={stabilizer}
+            onStabilizer={setStabilizer}
+            shapeRecognize={shapeRecognize}
+            onShapeRecognize={setShapeRecognize}
+            readOnly={readOnly}
+            roomRole={roomRole}
+            authorId={identity?.id ?? ""}
+            followPresenter={followPresenter}
+            onFollowPresenter={setFollowPresenter}
+            isPresenter={isPresenter}
+            onPresenter={setIsPresenter}
+          />
+        ) : null}
       </div>
     </div>
   );

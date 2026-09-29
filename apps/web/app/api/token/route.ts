@@ -18,16 +18,29 @@ export async function POST(req: Request) {
   if (!secret || secret.length < 32) {
     return NextResponse.json({ error: "LIVEBOARD_JWT_SECRET is not configured" }, { status: 500 });
   }
-  const body = (await req.json().catch(() => null)) as { room?: unknown; userId?: unknown; name?: unknown } | null;
+  const body = (await req.json().catch(() => null)) as {
+    room?: unknown;
+    userId?: unknown;
+    name?: unknown;
+    role?: unknown;
+    password?: unknown;
+  } | null;
   const room = typeof body?.room === "string" ? body.room : "";
   const userId = typeof body?.userId === "string" ? body.userId.slice(0, 64) : "";
   const name = typeof body?.name === "string" ? body.name.slice(0, 32) : "Guest";
+  const role = body?.role === "viewer" ? "viewer" : "editor";
+  const password = typeof body?.password === "string" ? body.password : "";
   if (!isValidRoomId(room) || !userId) {
     return NextResponse.json({ error: "invalid room or userId" }, { status: 400 });
   }
 
+  const boardPassword = process.env[`BOARD_PASSWORD_${room}`] ?? process.env.BOARD_PASSWORD ?? "";
+  if (boardPassword && role === "editor" && password !== boardPassword) {
+    return NextResponse.json({ error: "invalid board password" }, { status: 403 });
+  }
+
   const expiresAt = Math.floor(Date.now() / 1000) + TOKEN_TTL_SEC;
-  const token = await new SignJWT({ name, room, role: "editor" })
+  const token = await new SignJWT({ name, room, role })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(userId)
     .setIssuer(JWT_ISSUER)
@@ -36,5 +49,5 @@ export async function POST(req: Request) {
     .setExpirationTime(expiresAt)
     .sign(new TextEncoder().encode(secret));
 
-  return NextResponse.json({ token, expiresAt }, { headers: { "cache-control": "no-store" } });
+  return NextResponse.json({ token, expiresAt, role }, { headers: { "cache-control": "no-store" } });
 }

@@ -1,7 +1,7 @@
 import * as Y from "yjs";
 import { WebsocketProvider } from "y-websocket";
 import { IndexeddbPersistence } from "y-indexeddb";
-import { type AwarenessState } from "@liveboard/shared";
+import { type AwarenessState, type RoomRole } from "@liveboard/shared";
 import type { Identity } from "./identity";
 import { resolveTerminalClose, terminalCloseAction } from "./terminal-close";
 import { createSyncWatchdog } from "./sync-watchdog";
@@ -25,6 +25,8 @@ export interface RoomConnectionOptions {
   roomId: string;
   identity: Identity;
   wsUrl: string;
+  role?: RoomRole;
+  boardPassword?: string | null;
   onStatus: (s: ConnectionStatus) => void;
   /** Max ms after `open` to wait for first successful sync before retrying. */
   syncTimeoutMs?: number;
@@ -35,16 +37,28 @@ export interface RoomConnectionOptions {
 interface TokenResponse {
   token: string;
   expiresAt: number;
+  role?: RoomRole;
 }
 
 const DEFAULT_SYNC_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_CONNECT_ATTEMPTS = 3;
 
-async function fetchRoomToken(roomId: string, identity: Identity): Promise<TokenResponse> {
+async function fetchRoomToken(
+  roomId: string,
+  identity: Identity,
+  role: RoomRole,
+  password?: string | null,
+): Promise<TokenResponse> {
   const res = await fetch("/api/token", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ room: roomId, userId: identity.id, name: identity.name }),
+    body: JSON.stringify({
+      room: roomId,
+      userId: identity.id,
+      name: identity.name,
+      role,
+      password: password ?? "",
+    }),
   });
   if (!res.ok) throw new Error(`token request failed: ${res.status}`);
   return (await res.json()) as TokenResponse;
@@ -58,6 +72,8 @@ export function createRoomConnection(opts: RoomConnectionOptions): RoomConnectio
     roomId,
     identity,
     wsUrl,
+    role = "editor",
+    boardPassword = null,
     onStatus,
     syncTimeoutMs = DEFAULT_SYNC_TIMEOUT_MS,
     maxConnectAttempts = DEFAULT_MAX_CONNECT_ATTEMPTS,
@@ -109,7 +125,7 @@ export function createRoomConnection(opts: RoomConnectionOptions): RoomConnectio
 
   async function refreshToken(connectAfter: boolean) {
     try {
-      const { token, expiresAt } = await fetchRoomToken(roomId, identity);
+      const { token, expiresAt } = await fetchRoomToken(roomId, identity, role, boardPassword);
       if (destroyed) return;
       tokenFailures = 0;
       provider.params = { token };

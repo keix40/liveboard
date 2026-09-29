@@ -68,7 +68,43 @@ button { font: inherit; cursor: pointer; }
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  display: flex;
+  min-width: 0;
 }
+
+.board-surface-main {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.board-side-panel {
+  flex-shrink: 0;
+  width: min(280px, 34vw);
+  overflow-y: auto;
+  border-left: 1px solid #e2e8f0;
+  background: rgb(255 255 255 / 0.96);
+  padding: 8px;
+  font-size: 12px;
+  z-index: 6;
+}
+
+.board-side-panel .side-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.board-side-panel label { display: inline-flex; align-items: center; gap: 4px; }
+.board-side-panel .file-btn { cursor: pointer; padding: 4px 8px; border: 1px solid #e2e8f0; border-radius: 6px; }
+.board-side-panel .role-pill { padding: 2px 8px; border-radius: 999px; background: #f1f5f9; text-transform: capitalize; }
+
+.board.dark { background: #0f172a; color: #e2e8f0; }
+.board.dark .board-chrome { background: rgb(15 23 42 / 0.98); border-color: #334155; }
+.board.dark .board-side-panel { background: rgb(15 23 42 / 0.98); border-color: #334155; }
 
 .board-surface canvas {
   position: absolute;

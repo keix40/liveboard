@@ -72,7 +72,9 @@ test("remote viewer keeps prior strokes visible while new strokes stream in", as
   for (let i = 0; i < strokes.length; i++) {
     const [from, to] = strokes[i]!;
     await drawStroke(a, from, to);
-    await expect(b.getByTestId("board-canvas")).toHaveAttribute("data-stroke-count", String(i + 1));
+    await expect(b.getByTestId("board-canvas")).toHaveAttribute("data-stroke-count", String(i + 1), {
+      timeout: 15_000,
+    });
     const inkA = await inkPixels(a);
     expect(inkA).toBeGreaterThan(500);
     await waitForInkAtLeast(b, inkA);

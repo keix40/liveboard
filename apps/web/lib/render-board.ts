@@ -2,6 +2,7 @@ import type { Camera } from "./camera";
 import { readStroke, strokePath, type YStroke } from "./strokes";
 import { readShape, type YShape } from "./shapes";
 import { readNote, type YNote } from "./notes";
+import type { BoardBackground } from "@liveboard/shared";
 import type { SelectableRef } from "./selection";
 
 export interface RenderBoardOpts {
@@ -18,6 +19,8 @@ export interface RenderBoardOpts {
   /** Stroke indices to draw on the overlay (live ink); omitted from base when base excludes them. */
   liveStrokeIndices?: number[];
   excludeStrokeIndicesFromBase?: number[];
+  background?: BoardBackground;
+  darkMode?: boolean;
 }
 
 function applyCamera(ctx: CanvasRenderingContext2D, cam: Camera, dpr: number): void {
@@ -76,14 +79,44 @@ function drawShape(ctx: CanvasRenderingContext2D, s: ReturnType<typeof readShape
   ctx.restore();
 }
 
-function drawGrid(ctx: CanvasRenderingContext2D, camera: Camera, cssWidth: number, cssHeight: number): void {
-  ctx.strokeStyle = "#e2e8f0";
+function drawBackground(
+  ctx: CanvasRenderingContext2D,
+  camera: Camera,
+  cssWidth: number,
+  cssHeight: number,
+  background: BoardBackground,
+  darkMode: boolean,
+): void {
+  const line = darkMode ? "#334155" : "#e2e8f0";
+  const dot = darkMode ? "#475569" : "#cbd5e1";
+  ctx.strokeStyle = line;
+  ctx.fillStyle = dot;
   ctx.lineWidth = 1 / camera.zoom;
   const step = 64;
   const vw = cssWidth / camera.zoom;
   const vh = cssHeight / camera.zoom;
   const ox = -camera.x / camera.zoom;
   const oy = -camera.y / camera.zoom;
+  if (background === "blank") return;
+  if (background === "dots") {
+    for (let x = Math.floor(ox / step) * step; x < ox + vw; x += step) {
+      for (let y = Math.floor(oy / step) * step; y < oy + vh; y += step) {
+        ctx.beginPath();
+        ctx.arc(x, y, 1.2 / camera.zoom, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    return;
+  }
+  if (background === "lined") {
+    for (let y = Math.floor(oy / step) * step; y < oy + vh; y += step) {
+      ctx.beginPath();
+      ctx.moveTo(ox, y);
+      ctx.lineTo(ox + vw, y);
+      ctx.stroke();
+    }
+    return;
+  }
   for (let x = Math.floor(ox / step) * step; x < ox + vw; x += step) {
     ctx.beginPath();
     ctx.moveTo(x, oy);
@@ -110,11 +143,22 @@ function drawStrokeAt(ctx: CanvasRenderingContext2D, s: YStroke): void {
 
 /** Committed board content (grid, shapes, notes, strokes). */
 export function renderBoardBase(ctx: CanvasRenderingContext2D, opts: RenderBoardOpts): void {
-  const { camera, dpr, cssWidth, cssHeight, strokes, shapes, notes, excludeStrokeIndicesFromBase } = opts;
+  const {
+    camera,
+    dpr,
+    cssWidth,
+    cssHeight,
+    strokes,
+    shapes,
+    notes,
+    excludeStrokeIndicesFromBase,
+    background = "grid",
+    darkMode = false,
+  } = opts;
   const skip = new Set(excludeStrokeIndicesFromBase ?? []);
   ctx.save();
   applyCamera(ctx, camera, dpr);
-  drawGrid(ctx, camera, cssWidth, cssHeight);
+  drawBackground(ctx, camera, cssWidth, cssHeight, background, darkMode);
 
   const shapeList = [...shapes.values()].map(readShape).sort((a, b) => a.z - b.z);
   for (const sh of shapeList) drawShape(ctx, sh);
@@ -201,7 +245,7 @@ export function renderBoard(canvas: HTMLCanvasElement, opts: Omit<RenderBoardOpt
   const cssHeight = opts.cssHeight ?? canvas.clientHeight;
   const full: RenderBoardOpts = { ...opts, cssWidth, cssHeight };
   ctx.setTransform(opts.dpr, 0, 0, opts.dpr, 0, 0);
-  ctx.fillStyle = "#f8fafc";
+  ctx.fillStyle = full.darkMode ? "#0f172a" : "#f8fafc";
   ctx.fillRect(0, 0, cssWidth, cssHeight);
   renderBoardBase(ctx, full);
   renderBoardOverlay(ctx, full);
