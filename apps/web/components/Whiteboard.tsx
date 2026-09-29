@@ -30,7 +30,13 @@ import {
   onPenPointerUp,
   shouldIgnoreTouchPointer,
 } from "@/lib/pointer-session";
-import { renderBoard } from "@/lib/render-board";
+import { renderBoardBase, renderBoardOverlay } from "@/lib/render-board";
+import { BoardCompositor } from "@/lib/board-compositor";
+import {
+  isStrokePointsOnlyUpdate,
+  strokeIndicesFromPointEvents,
+  strokeIndicesTouched,
+} from "@/lib/yjs-events";
 import { getShapes, upsertShape, deleteShape } from "@/lib/shapes";
 import { createNote, deleteNote, getNotes } from "@/lib/notes";
 import { lassoSelect, pickAt, type SelectableRef } from "@/lib/selection";
@@ -58,6 +64,9 @@ function isPanGesture(tool: DrawTool, pointerType: string, touchCount: number): 
 export function Whiteboard({ roomId }: { roomId: string }) {
   const { conn, identity, status, peers } = useRoom(roomId);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasInstanceId = useRef(`canvas-${crypto.randomUUID()}`);
+  const compositorRef = useRef<BoardCompositor | null>(null);
+  const liveStrokeIndicesRef = useRef<number[]>([]);
   const drawing = useRef<Y.Array<number> | null>(null);
   const pointBatcher = useRef<StrokePointBatcher | null>(null);
   const rafRef = useRef(0);
@@ -76,7 +85,7 @@ export function Whiteboard({ roomId }: { roomId: string }) {
   const [tool, setTool] = useState<DrawTool>("pen");
   const [color, setColor] = useState("#0f172a");
   const [size, setSize] = useState(8);
-  const [renderTick, setRenderTick] = useState(0);
+  const [strokeCount, setStrokeCount] = useState(0);
   const [camera, setCamera] = useState<Camera>(DEFAULT_CAMERA);
   const [selection, setSelection] = useState<SelectableRef[]>([]);
   const [lassoPath, setLassoPath] = useState<{ x: number; y: number }[]>([]);
@@ -148,58 +157,94 @@ export function Whiteboard({ roomId }: { roomId: string }) {
     [camera],
   );
 
-  const scheduleRender = useCallback(() => {
-    cancelAnimationFrame(rafRef.current);
-    rafRef.current = requestAnimationFrame(() => {
+  const buildRenderOpts = useCallback(() => {
+    const canvas = canvasRef.current!;
+    const dpr = window.devicePixelRatio || 1;
+    const strokeList = strokes!.toArray();
+    return {
+      camera,
+      dpr,
+      cssWidth: canvas.clientWidth,
+      cssHeight: canvas.clientHeight,
+      strokes: strokeList,
+      shapes: collectShapes(),
+      notes: collectNotes(),
+      selection,
+      lassoPath,
+      previewShape: previewShape ?? undefined,
+      liveStrokeIndices: liveStrokeIndicesRef.current,
+      excludeStrokeIndicesFromBase: liveStrokeIndicesRef.current,
+    };
+  }, [camera, strokes, collectShapes, collectNotes, selection, lassoPath, previewShape]);
+
+  const paintFrame = useCallback(
+    (repaintBase: boolean) => {
       const canvas = canvasRef.current;
       if (!canvas || !strokes || !shapesMap || !notesMap) return;
+      if (!compositorRef.current) compositorRef.current = new BoardCompositor(canvas);
+      const compositor = compositorRef.current;
       const dpr = window.devicePixelRatio || 1;
-      renderBoard(canvas, {
-        camera,
-        dpr,
-        strokes: strokes.toArray(),
-        shapes: collectShapes(),
-        notes: collectNotes(),
-        selection,
-        lassoPath,
-        previewShape: previewShape ?? undefined,
-      });
-    });
-  }, [camera, strokes, shapesMap, notesMap, collectShapes, collectNotes, selection, lassoPath, previewShape]);
+      if (compositor.syncSize(canvas.clientWidth, canvas.clientHeight, dpr)) {
+        repaintBase = true;
+      }
+      if (repaintBase) compositor.invalidateBase();
+      const opts = buildRenderOpts();
+      compositor.paintBase((ctx) => renderBoardBase(ctx, opts));
+      compositor.paintOverlay((ctx) => renderBoardOverlay(ctx, opts));
+      compositor.composite();
+    },
+    [buildRenderOpts, strokes, shapesMap, notesMap],
+  );
+
+  const scheduleFrame = useCallback(
+    (repaintBase: boolean) => {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(() => paintFrame(repaintBase));
+    },
+    [paintFrame],
+  );
 
   useEffect(() => {
     if (!strokes || !shapesMap || !notesMap) return;
-    const bump = () => {
-      setRenderTick((t) => t + 1);
-      scheduleRender();
+    const onStrokesDeep = (events: Y.YEvent<any>[]) => {
+      if (isStrokePointsOnlyUpdate(events)) {
+        liveStrokeIndicesRef.current = strokeIndicesFromPointEvents(events);
+        scheduleFrame(false);
+      } else {
+        liveStrokeIndicesRef.current = strokeIndicesTouched(events);
+        scheduleFrame(true);
+      }
     };
-    strokes.observeDeep(bump);
-    shapesMap.observe(bump);
-    notesMap.observeDeep(bump);
-    scheduleRender();
+    const onStrokesShallow = () => setStrokeCount(strokes.length);
+    const onStructure = () => {
+      liveStrokeIndicesRef.current = [];
+      scheduleFrame(true);
+    };
+    strokes.observeDeep(onStrokesDeep);
+    strokes.observe(onStrokesShallow);
+    shapesMap.observe(onStructure);
+    notesMap.observeDeep(onStructure);
+    setStrokeCount(strokes.length);
+    scheduleFrame(true);
     return () => {
-      strokes.unobserveDeep(bump);
-      shapesMap.unobserve(bump);
-      notesMap.unobserveDeep(bump);
+      strokes.unobserveDeep(onStrokesDeep);
+      strokes.unobserve(onStrokesShallow);
+      shapesMap.unobserve(onStructure);
+      notesMap.unobserveDeep(onStructure);
     };
-  }, [strokes, shapesMap, notesMap, scheduleRender]);
+  }, [strokes, shapesMap, notesMap, scheduleFrame]);
 
   useEffect(() => {
-    scheduleRender();
-  }, [camera, selection, lassoPath, previewShape, renderTick, scheduleRender]);
+    scheduleFrame(true);
+  }, [camera, selection, lassoPath, previewShape, scheduleFrame]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ro = new ResizeObserver(() => {
-      const dpr = window.devicePixelRatio || 1;
-      canvas.width = Math.round(canvas.clientWidth * dpr);
-      canvas.height = Math.round(canvas.clientHeight * dpr);
-      scheduleRender();
-    });
+    const ro = new ResizeObserver(() => scheduleFrame(true));
     ro.observe(canvas);
     return () => ro.disconnect();
-  }, [scheduleRender]);
+  }, [scheduleFrame]);
 
   useEffect(() => {
     const awareness = conn?.provider.awareness;
@@ -351,8 +396,10 @@ export function Whiteboard({ roomId }: { roomId: string }) {
       });
       drawing.current = points;
       strokePointerIdRef.current = e.pointerId;
+      liveStrokeIndicesRef.current = [getStrokes(doc).length - 1];
       pointBatcher.current?.dispose();
       pointBatcher.current = new StrokePointBatcher(doc, points);
+      scheduleFrame(true);
     }
   };
 
@@ -492,6 +539,8 @@ export function Whiteboard({ roomId }: { roomId: string }) {
       pointBatcher.current = null;
       drawing.current = null;
       strokePointerIdRef.current = null;
+      liveStrokeIndicesRef.current = [];
+      scheduleFrame(true);
     }
   };
 
@@ -646,7 +695,8 @@ export function Whiteboard({ roomId }: { roomId: string }) {
         <canvas
           ref={canvasRef}
           data-testid="board-canvas"
-          data-stroke-count={strokes?.length ?? 0}
+          data-canvas-id={canvasInstanceId.current}
+          data-stroke-count={strokeCount}
           style={{ cursor: cursorStyle, touchAction: "none" }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}

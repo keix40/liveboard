@@ -48,3 +48,21 @@ test("HUD does not overlap toolbar tools", async ({ page }) => {
   const penBox = (await pen.boundingBox())!;
   expect(statusBox.y + statusBox.height).toBeLessThanOrEqual(penBox.y + 2);
 });
+
+test("status pills do not cover export buttons at desktop width", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.goto(`/board/hud-desktop-${Date.now()}`);
+  const status = page.getByTestId("status");
+  const pdf = page.getByTestId("tool-export-pdf");
+  await pdf.scrollIntoViewIfNeeded();
+  const statusBox = (await status.boundingBox())!;
+  const pdfBox = (await pdf.boundingBox())!;
+  expect(statusBox.y + statusBox.height).toBeLessThanOrEqual(pdfBox.y + 1);
+  const cx = pdfBox.x + pdfBox.width / 2;
+  const cy = pdfBox.y + pdfBox.height / 2;
+  const hit = await page.evaluate(
+    ({ x, y }) => document.elementFromPoint(x, y)?.closest("[data-testid]")?.getAttribute("data-testid") ?? null,
+    { x: cx, y: cy },
+  );
+  expect(hit).toBe("tool-export-pdf");
+});

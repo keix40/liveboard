@@ -7,12 +7,17 @@ import type { SelectableRef } from "./selection";
 export interface RenderBoardOpts {
   camera: Camera;
   dpr: number;
+  cssWidth: number;
+  cssHeight: number;
   strokes: YStroke[];
   shapes: Map<string, YShape>;
   notes: Map<string, YNote>;
   selection?: SelectableRef[];
   lassoPath?: { x: number; y: number }[];
   previewShape?: { kind: string; x: number; y: number; w: number; h: number; stroke: string; strokeWidth: number };
+  /** Stroke indices to draw on the overlay (live ink); omitted from base when base excludes them. */
+  liveStrokeIndices?: number[];
+  excludeStrokeIndicesFromBase?: number[];
 }
 
 function applyCamera(ctx: CanvasRenderingContext2D, cam: Camera, dpr: number): void {
@@ -71,21 +76,12 @@ function drawShape(ctx: CanvasRenderingContext2D, s: ReturnType<typeof readShape
   ctx.restore();
 }
 
-export function renderBoard(canvas: HTMLCanvasElement, opts: RenderBoardOpts): void {
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  const { camera, dpr, strokes, shapes, notes, selection, lassoPath, previewShape } = opts;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
-  ctx.save();
-  applyCamera(ctx, camera, dpr);
-
-  // Grid hint in world space
+function drawGrid(ctx: CanvasRenderingContext2D, camera: Camera, cssWidth: number, cssHeight: number): void {
   ctx.strokeStyle = "#e2e8f0";
   ctx.lineWidth = 1 / camera.zoom;
   const step = 64;
-  const vw = canvas.clientWidth / camera.zoom;
-  const vh = canvas.clientHeight / camera.zoom;
+  const vw = cssWidth / camera.zoom;
+  const vh = cssHeight / camera.zoom;
   const ox = -camera.x / camera.zoom;
   const oy = -camera.y / camera.zoom;
   for (let x = Math.floor(ox / step) * step; x < ox + vw; x += step) {
@@ -100,6 +96,25 @@ export function renderBoard(canvas: HTMLCanvasElement, opts: RenderBoardOpts): v
     ctx.lineTo(ox + vw, y);
     ctx.stroke();
   }
+}
+
+function drawStrokeAt(ctx: CanvasRenderingContext2D, s: YStroke): void {
+  const { color, size, points, variant } = readStroke(s);
+  const d = strokePath(points, size, variant);
+  if (!d) return;
+  ctx.globalAlpha = variant === "highlighter" ? 0.35 : 1;
+  ctx.fillStyle = color;
+  ctx.fill(new Path2D(d));
+  ctx.globalAlpha = 1;
+}
+
+/** Committed board content (grid, shapes, notes, strokes). */
+export function renderBoardBase(ctx: CanvasRenderingContext2D, opts: RenderBoardOpts): void {
+  const { camera, dpr, cssWidth, cssHeight, strokes, shapes, notes, excludeStrokeIndicesFromBase } = opts;
+  const skip = new Set(excludeStrokeIndicesFromBase ?? []);
+  ctx.save();
+  applyCamera(ctx, camera, dpr);
+  drawGrid(ctx, camera, cssWidth, cssHeight);
 
   const shapeList = [...shapes.values()].map(readShape).sort((a, b) => a.z - b.z);
   for (const sh of shapeList) drawShape(ctx, sh);
@@ -112,14 +127,23 @@ export function renderBoard(canvas: HTMLCanvasElement, opts: RenderBoardOpts): v
     ctx.strokeRect(n.x, n.y, n.w, n.h);
   }
 
-  for (const s of strokes) {
-    const { color, size, points, variant } = readStroke(s);
-    const d = strokePath(points, size, variant);
-    if (!d) continue;
-    ctx.globalAlpha = variant === "highlighter" ? 0.35 : 1;
-    ctx.fillStyle = color;
-    ctx.fill(new Path2D(d));
-    ctx.globalAlpha = 1;
+  strokes.forEach((s, i) => {
+    if (!skip.has(i)) drawStrokeAt(ctx, s);
+  });
+  ctx.restore();
+}
+
+/** Ephemeral UI ink (live strokes, selection, lasso, shape preview). */
+export function renderBoardOverlay(ctx: CanvasRenderingContext2D, opts: RenderBoardOpts): void {
+  const { camera, dpr, strokes, shapes, notes, selection, lassoPath, previewShape, liveStrokeIndices } = opts;
+  ctx.save();
+  applyCamera(ctx, camera, dpr);
+
+  if (liveStrokeIndices && liveStrokeIndices.length > 0) {
+    for (const i of liveStrokeIndices) {
+      const s = strokes[i];
+      if (s) drawStrokeAt(ctx, s);
+    }
   }
 
   if (previewShape) {
@@ -169,10 +193,24 @@ export function renderBoard(canvas: HTMLCanvasElement, opts: RenderBoardOpts): v
   ctx.restore();
 }
 
+/** Full single-canvas render (export / tests). */
+export function renderBoard(canvas: HTMLCanvasElement, opts: Omit<RenderBoardOpts, "cssWidth" | "cssHeight"> & { cssWidth?: number; cssHeight?: number }): void {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const cssWidth = opts.cssWidth ?? canvas.clientWidth;
+  const cssHeight = opts.cssHeight ?? canvas.clientHeight;
+  const full: RenderBoardOpts = { ...opts, cssWidth, cssHeight };
+  ctx.setTransform(opts.dpr, 0, 0, opts.dpr, 0, 0);
+  ctx.fillStyle = "#f8fafc";
+  ctx.fillRect(0, 0, cssWidth, cssHeight);
+  renderBoardBase(ctx, full);
+  renderBoardOverlay(ctx, full);
+}
+
 /** Render full board to an offscreen canvas for export (no UI chrome). */
 export function renderBoardToExport(
   bounds: { minX: number; minY: number; maxX: number; maxY: number },
-  opts: Omit<RenderBoardOpts, "camera" | "dpr" | "selection" | "lassoPath" | "previewShape">,
+  opts: Omit<RenderBoardOpts, "camera" | "dpr" | "cssWidth" | "cssHeight" | "selection" | "lassoPath" | "previewShape">,
   padding = 32,
 ): HTMLCanvasElement {
   const w = Math.ceil(bounds.maxX - bounds.minX + padding * 2);
@@ -181,6 +219,6 @@ export function renderBoardToExport(
   off.width = w;
   off.height = h;
   const cam = { x: padding - bounds.minX, y: padding - bounds.minY, zoom: 1 };
-  renderBoard(off, { ...opts, camera: cam, dpr: 1, selection: undefined, lassoPath: undefined, previewShape: undefined });
+  renderBoard(off, { ...opts, camera: cam, dpr: 1, cssWidth: w, cssHeight: h, selection: undefined, lassoPath: undefined, previewShape: undefined });
   return off;
 }

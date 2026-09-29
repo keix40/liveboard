@@ -22,22 +22,37 @@ button { font: inherit; cursor: pointer; }
 .board-chrome {
   flex-shrink: 0;
   z-index: 20;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: auto auto;
   gap: 8px;
   padding: 8px 10px 10px;
-  background: rgb(248 250 252 / 0.96);
+  background: rgb(248 250 252 / 0.98);
   border-bottom: 1px solid #e2e8f0;
   backdrop-filter: blur(6px);
+  isolation: isolate;
 }
 
 .board-hud {
+  grid-row: 1;
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
   align-items: center;
   gap: 8px;
   width: 100%;
+  min-height: 32px;
+  position: relative;
+  z-index: 2;
+}
+
+.toolbar-scroll {
+  grid-row: 2;
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 
 .board-surface {
@@ -60,12 +75,6 @@ button { font: inherit; cursor: pointer; }
 .sticky-note.selected { outline: 2px solid #2563eb; }
 .sticky-text { width: 100%; height: 100%; border: 0; resize: none; background: transparent; padding: 8px; font: inherit; box-sizing: border-box; }
 
-.toolbar-scroll {
-  width: 100%;
-  overflow-x: auto;
-  overflow-y: hidden;
-  -webkit-overflow-scrolling: touch;
-}
 
 .toolbar-scroll.compact {
   max-height: min(12vh, 76px);
@@ -98,7 +107,7 @@ button { font: inherit; cursor: pointer; }
 .toolbar button.tool { padding: 4px 10px; border-radius: 8px; border: 1px solid transparent; background: transparent; flex-shrink: 0; }
 .toolbar button.tool:hover { background: #f1f5f9; }
 
-.hud { display: contents; }
+.hud { /* children stay inside .board-hud — never flatten into toolbar row */ }
 .pill { padding: 4px 10px; border-radius: 999px; background: white; border: 1px solid #e2e8f0; white-space: nowrap; }
 .status-connected { color: #15803d; }
 .status-connecting { color: #b45309; }
