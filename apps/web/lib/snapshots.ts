@@ -1,6 +1,6 @@
 import * as Y from "yjs";
 import { YKEYS } from "@liveboard/shared";
-import { capturePageSnapshot, type PageSnapshot } from "./pages";
+import { capturePageSnapshot, restorePageSnapshot, type PageSnapshot } from "./pages";
 import { LOCAL_ORIGIN } from "./strokes";
 
 export const MAX_SNAPSHOTS = 20;
@@ -23,17 +23,34 @@ export function pushSnapshot(doc: Y.Doc, label: string): void {
     entry.set("id", crypto.randomUUID());
     entry.set("label", label);
     entry.set("createdAt", Date.now());
-    entry.set("page", capturePageSnapshot(doc));
+    entry.set("page", JSON.stringify(capturePageSnapshot(doc)));
     arr.push([entry]);
     while (arr.length > MAX_SNAPSHOTS) arr.delete(0, 1);
   }, LOCAL_ORIGIN);
 }
 
 export function readSnapshot(m: Y.Map<unknown>): HistorySnapshot {
+  const raw = m.get("page");
+  const page =
+    typeof raw === "string"
+      ? (JSON.parse(raw) as PageSnapshot)
+      : ((raw as PageSnapshot | undefined) ?? { strokes: [], shapes: {}, notes: {}, assets: {} });
   return {
     id: String(m.get("id")),
     label: String(m.get("label") ?? "Snapshot"),
     createdAt: Number(m.get("createdAt") ?? 0),
-    page: m.get("page") as PageSnapshot,
+    page: { ...page, assets: page.assets ?? {} },
   };
+}
+
+/** Restore board content from a history entry (undoable, syncs to peers). */
+export function restoreHistorySnapshot(doc: Y.Doc, snap: PageSnapshot): void {
+  restorePageSnapshot(doc, snap);
+}
+
+export function listHistorySnapshots(doc: Y.Doc): HistorySnapshot[] {
+  return getSnapshots(doc)
+    .toArray()
+    .filter((m): m is Y.Map<unknown> => m instanceof Y.Map)
+    .map(readSnapshot);
 }

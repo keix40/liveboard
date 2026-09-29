@@ -32,6 +32,19 @@ export const ASSET_ROOM_MAX_BYTES = 600_000;
 export type BoardBackground = "blank" | "grid" | "dots" | "lined";
 export type BoardTemplate = "none" | "kanban" | "mindmap" | "wireframe" | "retro";
 
+/** Named viewport region for navigation and per-frame export. */
+export interface BoardFrame {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Auto history snapshots at most every 5 minutes while the board is active. */
+export const AUTO_SNAPSHOT_INTERVAL_MS = 5 * 60 * 1000;
+
 /** y-websocket-compatible top-level message types (first varUint of every frame). */
 export const MessageType = {
   Sync: 0,

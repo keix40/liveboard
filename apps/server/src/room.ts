@@ -11,6 +11,7 @@ import type { Logger } from "./logger.js";
 import { PerTurnTokenBucket, TokenBucket } from "./rate-limit.js";
 import { forceCloseWebSocket } from "./ws-close.js";
 import { encodeAwareness, encodeSyncStep1, encodeUpdate } from "./protocol.js";
+import { policyAllowsUpdate } from "./yjs-policy.js";
 
 /** Transaction origins that must NOT be re-persisted / re-published. */
 export const PERSISTENCE_ORIGIN = Symbol("persistence");
@@ -36,6 +37,8 @@ interface Client {
   limiter: PerTurnTokenBucket;
   rateLimitTurn: number;
   kicked: boolean;
+  /** Viewers may send one SyncStep2 while completing the initial handshake. */
+  syncComplete: boolean;
   onMessage: (data: WebSocket.RawData, isBinary: boolean) => void;
 }
 
@@ -92,6 +95,7 @@ export class Room {
       ),
       rateLimitTurn: -1,
       kicked: false,
+      syncComplete: user.role === "editor",
       onMessage: () => {},
     };
     client.onMessage = (data, isBinary) => {
@@ -139,6 +143,38 @@ export class Room {
 
   // ─── Incoming frames ────────────────────────────────────────────────────
 
+  private handleSyncMessage(client: Client, decoder: decoding.Decoder, encoder: encoding.Encoder): void {
+    const syncMsg = decoding.readVarUint(decoder);
+    if (client.user.role === "viewer") {
+      if (syncMsg === syncProtocol.messageYjsUpdate) {
+        this.kick(client, CloseCode.Forbidden, "viewers read-only");
+        return;
+      }
+      if (syncMsg === syncProtocol.messageYjsSyncStep2 && client.syncComplete) {
+        this.kick(client, CloseCode.Forbidden, "viewers read-only");
+        return;
+      }
+    }
+    switch (syncMsg) {
+      case syncProtocol.messageYjsSyncStep1:
+        syncProtocol.readSyncStep1(decoder, encoder, this.doc);
+        break;
+      case syncProtocol.messageYjsSyncStep2:
+      case syncProtocol.messageYjsUpdate: {
+        const update = decoding.readVarUint8Array(decoder);
+        if (!policyAllowsUpdate(this.doc, update)) {
+          this.kick(client, CloseCode.Forbidden, "locked content");
+          return;
+        }
+        Y.applyUpdate(this.doc, update, client.ws);
+        if (client.user.role === "viewer") client.syncComplete = true;
+        break;
+      }
+      default:
+        this.kick(client, CloseCode.PolicyViolation, "unknown sync message");
+    }
+  }
+
   private handleMessage(client: Client, data: Uint8Array): void {
     if (client.kicked) return;
     try {
@@ -146,14 +182,9 @@ export class Room {
       const type = decoding.readVarUint(decoder);
       switch (type) {
         case MessageType.Sync: {
-          // Viewers may request state (step1) but never write (step2 / update).
-          if (client.user.role === "viewer" && decoding.peekVarUint(decoder) !== syncProtocol.messageYjsSyncStep1) {
-            return;
-          }
           const encoder = encoding.createEncoder();
           encoding.writeVarUint(encoder, MessageType.Sync);
-          // Applies step2/update to the doc with origin = this socket, or writes step2 as a reply to step1.
-          syncProtocol.readSyncMessage(decoder, encoder, this.doc, client.ws);
+          this.handleSyncMessage(client, decoder, encoder);
           if (encoding.length(encoder) > 1) this.send(client.ws, encoding.toUint8Array(encoder));
           break;
         }

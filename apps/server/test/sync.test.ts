@@ -95,14 +95,15 @@ describe("sync server", () => {
     b.provider.destroy();
   });
 
-  it("ignores writes from viewers", async () => {
-    const editor = await connect("room-view", await token("room-view"));
-    const viewer = await connect("room-view", await token("room-view", "viewer"));
-    await waitFor(() => editor.provider.synced && viewer.provider.synced);
-    viewer.doc.getArray<number>("strokes").push([42]);
+  it("rejects writes from viewers without mutating the room", async () => {
+    const room = `room-view-${Date.now()}`;
+    const editor = await connect(room, await token(room));
+    const viewer = await connect(room, await token(room, "viewer"));
+    await waitFor(() => editor.provider.synced && viewer.provider.synced, 10_000);
     editor.doc.getArray<number>("strokes").push([7]);
     await waitFor(() => viewer.doc.getArray("strokes").toArray().includes(7));
-    await new Promise((r) => setTimeout(r, 100));
+    viewer.doc.getArray<number>("strokes").push([42]);
+    await new Promise((r) => setTimeout(r, 200));
     expect(editor.doc.getArray("strokes").toArray()).toEqual([7]);
     editor.provider.destroy();
     viewer.provider.destroy();

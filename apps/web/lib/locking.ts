@@ -1,9 +1,13 @@
-import type * as Y from "yjs";
+import * as Y from "yjs";
 import { readBoardMeta, writeBoardMeta } from "./board-meta";
+import { getAssets, readAsset } from "./assets";
 import { LOCAL_ORIGIN } from "./strokes";
 
 export function isLocked(doc: Y.Doc, id: string): boolean {
-  return readBoardMeta(doc).lockedIds.includes(id);
+  if (readBoardMeta(doc).lockedIds.includes(id)) return true;
+  const asset = getAssets(doc).get(id);
+  if (asset instanceof Y.Map) return readAsset(asset).locked;
+  return false;
 }
 
 export function toggleLock(doc: Y.Doc, id: string): void {

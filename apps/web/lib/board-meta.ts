@@ -1,5 +1,11 @@
 import * as Y from "yjs";
-import { YKEYS, type BoardBackground, type BoardTemplate, DOC_SCHEMA_VERSION } from "@liveboard/shared";
+import {
+  YKEYS,
+  type BoardBackground,
+  type BoardFrame,
+  type BoardTemplate,
+  DOC_SCHEMA_VERSION,
+} from "@liveboard/shared";
 
 export interface BoardMeta {
   schemaVersion: number;
@@ -10,6 +16,7 @@ export interface BoardMeta {
   pageOrder: string[];
   boardPassword: string | null;
   lockedIds: string[];
+  frames: BoardFrame[];
 }
 
 const DEFAULT: BoardMeta = {
@@ -21,6 +28,7 @@ const DEFAULT: BoardMeta = {
   pageOrder: ["page-1"],
   boardPassword: null,
   lockedIds: [],
+  frames: [],
 };
 
 export function getMetaMap(doc: Y.Doc): Y.Map<unknown> {
@@ -39,6 +47,7 @@ export function readBoardMeta(doc: Y.Doc): BoardMeta {
     pageOrder: Array.isArray(pageOrderRaw) ? (pageOrderRaw as string[]) : [...DEFAULT.pageOrder],
     boardPassword: m.get("boardPassword") != null ? String(m.get("boardPassword")) : null,
     lockedIds: Array.isArray(m.get("lockedIds")) ? (m.get("lockedIds") as string[]) : [],
+    frames: Array.isArray(m.get("frames")) ? (m.get("frames") as BoardFrame[]) : [],
   };
 }
 
@@ -56,6 +65,7 @@ export function writeBoardMeta(doc: Y.Doc, patch: Partial<BoardMeta>, origin: sy
       else m.delete("boardPassword");
     }
     if (patch.lockedIds != null) m.set("lockedIds", patch.lockedIds);
+    if (patch.frames != null) m.set("frames", patch.frames);
   }, origin);
 }
 

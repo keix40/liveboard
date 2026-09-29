@@ -4,6 +4,7 @@ import { readShape, type YShape } from "./shapes";
 import { readNote, type YNote } from "./notes";
 import type { BoardBackground } from "@liveboard/shared";
 import type { SelectableRef } from "./selection";
+import type { BoardAsset } from "./assets";
 
 export interface RenderBoardOpts {
   camera: Camera;
@@ -21,6 +22,8 @@ export interface RenderBoardOpts {
   excludeStrokeIndicesFromBase?: number[];
   background?: BoardBackground;
   darkMode?: boolean;
+  assets?: Map<string, BoardAsset>;
+  assetImages?: Map<string, CanvasImageSource>;
 }
 
 function applyCamera(ctx: CanvasRenderingContext2D, cam: Camera, dpr: number): void {
@@ -154,11 +157,29 @@ export function renderBoardBase(ctx: CanvasRenderingContext2D, opts: RenderBoard
     excludeStrokeIndicesFromBase,
     background = "grid",
     darkMode = false,
+    assets,
+    assetImages,
   } = opts;
   const skip = new Set(excludeStrokeIndicesFromBase ?? []);
   ctx.save();
   applyCamera(ctx, camera, dpr);
   drawBackground(ctx, camera, cssWidth, cssHeight, background, darkMode);
+
+  if (assets && assetImages) {
+    const assetList = [...assets.values()].sort((a, b) => a.z - b.z);
+    for (const a of assetList) {
+      const img = assetImages.get(a.id);
+      if (!img) continue;
+      ctx.drawImage(img, a.x, a.y, a.w, a.h);
+      if (a.locked) {
+        ctx.strokeStyle = "rgb(100 116 139 / 0.55)";
+        ctx.lineWidth = 2 / camera.zoom;
+        ctx.setLineDash([6 / camera.zoom, 4 / camera.zoom]);
+        ctx.strokeRect(a.x, a.y, a.w, a.h);
+        ctx.setLineDash([]);
+      }
+    }
+  }
 
   const shapeList = [...shapes.values()].map(readShape).sort((a, b) => a.z - b.z);
   for (const sh of shapeList) drawShape(ctx, sh);
@@ -230,6 +251,9 @@ export function renderBoardOverlay(ctx: CanvasRenderingContext2D, opts: RenderBo
       } else if (sel.kind === "note") {
         const n = readNote(notes.get(sel.id)!);
         ctx.strokeRect(n.x - 4, n.y - 4, n.w + 8, n.h + 8);
+      } else if (sel.kind === "asset" && opts.assets) {
+        const a = opts.assets.get(sel.id);
+        if (a) ctx.strokeRect(a.x - 4, a.y - 4, a.w + 8, a.h + 8);
       }
     }
   }

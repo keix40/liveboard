@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
-import type { Point, RoomRole, ShapeKind } from "@liveboard/shared";
+import { AUTO_SNAPSHOT_INTERVAL_MS, type Point, type RoomRole, type ShapeKind } from "@liveboard/shared";
 import { useRoom } from "@/lib/useRoom";
 import {
   beginStroke,
@@ -48,7 +48,11 @@ import { BoardSidePanel } from "./BoardSidePanel";
 import { ensureBoardMeta, readBoardMeta } from "@/lib/board-meta";
 import { stabilizePoint } from "@/lib/stroke-stabilizer";
 import { recognizeStrokeShape } from "@/lib/shape-recognize";
-import { isLocked } from "@/lib/locking";
+import { getAssets, readAsset, type BoardAsset } from "@/lib/assets";
+import { assetDataToBlobUrl } from "@/lib/asset-decode";
+import { cameraForFrame, frameBounds, frameFromViewport } from "@/lib/frames";
+import { isLocked, toggleLock } from "@/lib/locking";
+import { listHistorySnapshots, pushSnapshot, restoreHistorySnapshot } from "@/lib/snapshots";
 
 const STATUS_LABEL: Record<string, string> = {
   connected: "● Connected",
@@ -136,6 +140,11 @@ export function Whiteboard({
   const [shapeRecognize, setShapeRecognize] = useState(true);
   const [followPresenter, setFollowPresenter] = useState(false);
   const [isPresenter, setIsPresenter] = useState(false);
+  const [assetImages, setAssetImages] = useState<Map<string, CanvasImageSource>>(new Map());
+  const [assetRevision, setAssetRevision] = useState(0);
+  const [sidePanelOpen, setSidePanelOpen] = useState(false);
+  const lastActivityRef = useRef(Date.now());
+  const lastAutoSnapshotRef = useRef(0);
   const strokeHistoryRef = useRef<Point[]>([]);
   const [previewShape, setPreviewShape] = useState<{
     kind: string;
@@ -152,14 +161,15 @@ export function Whiteboard({
   const strokes = useMemo(() => (doc ? getStrokes(doc) : null), [doc]);
   const shapesMap = useMemo(() => (doc ? getShapes(doc) : null), [doc]);
   const notesMap = useMemo(() => (doc ? getNotes(doc) : null), [doc]);
+  const assetsMap = useMemo(() => (doc ? getAssets(doc) : null), [doc]);
 
   const undo = useMemo(() => {
-    if (!doc || !strokes || !shapesMap || !notesMap) return null;
-    return new Y.UndoManager([strokes, shapesMap, notesMap], {
+    if (!doc || !strokes || !shapesMap || !notesMap || !assetsMap) return null;
+    return new Y.UndoManager([strokes, shapesMap, notesMap, assetsMap], {
       trackedOrigins: new Set([LOCAL_ORIGIN]),
       captureTimeout: 300,
     });
-  }, [doc, strokes, shapesMap, notesMap]);
+  }, [doc, strokes, shapesMap, notesMap, assetsMap]);
   useEffect(() => () => undo?.destroy(), [undo]);
 
   const beginAction = useCallback(() => {
@@ -195,6 +205,18 @@ export function Whiteboard({
     return m;
   }, [notesMap]);
 
+  const collectAssetsPlain = useCallback((): Map<string, BoardAsset> => {
+    const m = new Map<string, BoardAsset>();
+    assetsMap?.forEach((v, k) => m.set(k, readAsset(v)));
+    return m;
+  }, [assetsMap]);
+
+  const collectAssetsY = useCallback(() => {
+    const m = new Map<string, Y.Map<unknown>>();
+    assetsMap?.forEach((v, k) => m.set(k, v));
+    return m;
+  }, [assetsMap]);
+
   const toWorldFromClient = useCallback(
     (clientX: number, clientY: number) => {
       const canvas = canvasRef.current!;
@@ -225,8 +247,23 @@ export function Whiteboard({
         localLiveStrokeIndexRef.current != null ? [localLiveStrokeIndexRef.current] : undefined,
       background: boardMeta?.background ?? "grid",
       darkMode: boardMeta?.darkMode ?? false,
+      assets: collectAssetsPlain(),
+      assetImages,
     };
-  }, [camera, strokes, collectShapes, collectNotes, selection, lassoPath, previewShape, boardMeta, metaRevision]);
+  }, [
+    camera,
+    strokes,
+    collectShapes,
+    collectNotes,
+    collectAssetsPlain,
+    assetImages,
+    selection,
+    lassoPath,
+    previewShape,
+    boardMeta,
+    metaRevision,
+    assetRevision,
+  ]);
 
   const paintFrame = useCallback(
     (repaintBase: boolean) => {
@@ -244,7 +281,7 @@ export function Whiteboard({
       compositor.paintOverlay((ctx) => renderBoardOverlay(ctx, opts));
       compositor.composite();
     },
-    [buildRenderOpts, strokes, shapesMap, notesMap],
+    [buildRenderOpts, strokes, shapesMap, notesMap, assetImages],
   );
 
   const scheduleFrame = useCallback(
@@ -256,7 +293,7 @@ export function Whiteboard({
   );
 
   useEffect(() => {
-    if (!strokes || !shapesMap || !notesMap) return;
+    if (!strokes || !shapesMap || !notesMap || !assetsMap) return;
     const onStrokesDeep = (events: Y.YEvent<any>[]) => {
       if (
         isStrokePointsOnlyUpdate(events) &&
@@ -285,6 +322,11 @@ export function Whiteboard({
     shapesMap.observe(onStructure);
     shapesMap.observe(onShapesChange);
     notesMap.observe(onNotesMap);
+    const onAssets = () => {
+      setAssetRevision((n) => n + 1);
+      scheduleFrame(true);
+    };
+    assetsMap.observe(onAssets);
     const metaMap = doc?.getMap("meta");
     const onMeta = () => setMetaRevision((n) => n + 1);
     if (doc && metaMap) {
@@ -293,7 +335,6 @@ export function Whiteboard({
     }
     setStrokeCount(strokes.length);
     setShapeCount(shapesMap.size);
-    setNotesRevision((n) => n + 1);
     scheduleFrame(true);
     return () => {
       strokes.unobserveDeep(onStrokesDeep);
@@ -301,9 +342,63 @@ export function Whiteboard({
       shapesMap.unobserve(onStructure);
       shapesMap.unobserve(onShapesChange);
       notesMap.unobserve(onNotesMap);
+      assetsMap.unobserve(onAssets);
       if (metaMap) metaMap.unobserve(onMeta);
     };
-  }, [strokes, shapesMap, notesMap, doc, scheduleFrame]);
+  }, [strokes, shapesMap, notesMap, assetsMap, doc, scheduleFrame]);
+
+  useEffect(() => {
+    if (!assetsMap) return;
+    let cancelled = false;
+    const load = async () => {
+      const next = new Map<string, CanvasImageSource>();
+      for (const [id, m] of assetsMap.entries()) {
+        const a = readAsset(m);
+        try {
+          const url = await assetDataToBlobUrl(a.dataBase64, a.mime);
+          const img = new Image();
+          await new Promise<void>((resolve, reject) => {
+            img.onload = () => resolve();
+            img.onerror = () => reject(new Error("asset load failed"));
+            img.src = url;
+          });
+          if (!cancelled) next.set(id, img);
+        } catch {
+          /* skip broken asset */
+        }
+      }
+      if (!cancelled) {
+        setAssetImages((prev) => {
+          if (prev.size === next.size && [...next.keys()].every((k) => prev.get(k) === next.get(k))) return prev;
+          return next;
+        });
+        scheduleFrame(true);
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [assetsMap]);
+
+  useEffect(() => {
+    if (!doc || readOnly) return;
+    const bump = () => {
+      lastActivityRef.current = Date.now();
+    };
+    doc.on("update", bump);
+    const timer = setInterval(() => {
+      const now = Date.now();
+      if (now - lastActivityRef.current > AUTO_SNAPSHOT_INTERVAL_MS) return;
+      if (now - lastAutoSnapshotRef.current < AUTO_SNAPSHOT_INTERVAL_MS) return;
+      lastAutoSnapshotRef.current = now;
+      pushSnapshot(doc, `Auto ${new Date().toLocaleTimeString()}`);
+    }, 30_000);
+    return () => {
+      clearInterval(timer);
+      doc.off("update", bump);
+    };
+  }, [doc, readOnly]);
 
   useEffect(() => {
     scheduleFrame(true);
@@ -438,7 +533,7 @@ export function Whiteboard({
 
     if (tool === "select") {
       beginAction();
-      const hit = pickAt(strokes!.toArray(), collectShapes(), collectNotes(), world.x, world.y);
+      const hit = pickAt(strokes!.toArray(), collectShapes(), collectNotes(), world.x, world.y, collectAssetsY());
       if (hit && e.shiftKey) {
         setSelection((sel) => (sel.some((s) => s.id === hit.id) ? sel.filter((s) => s.id !== hit.id) : [...sel, hit]));
       } else if (hit) {
@@ -705,7 +800,13 @@ export function Whiteboard({
       gesturePointerIdRef.current = null;
 
       if (tool === "select" && lassoRef.current.length > 2 && strokes && shapesMap && notesMap) {
-        const picked = lassoSelect(strokes.toArray(), collectShapes(), collectNotes(), lassoRef.current);
+        const picked = lassoSelect(
+          strokes.toArray(),
+          collectShapes(),
+          collectNotes(),
+          lassoRef.current,
+          collectAssetsY(),
+        );
         setSelection(picked);
       }
       lassoRef.current = [];
@@ -795,6 +896,7 @@ export function Whiteboard({
       strokes.delete(0, strokes.length);
       shapesMap?.forEach((_, k) => shapesMap.delete(k));
       notesMap?.forEach((_, k) => notesMap.delete(k));
+      assetsMap?.forEach((_, k) => assetsMap.delete(k));
     }, LOCAL_ORIGIN);
     setSelection([]);
   };
@@ -804,9 +906,11 @@ export function Whiteboard({
     beginAction();
     doc.transact(() => {
       for (const sel of selection) {
+        if (isLocked(doc, sel.id)) continue;
         if (sel.kind === "stroke") deleteStrokeById(doc, sel.id);
         else if (sel.kind === "shape") deleteShape(doc, sel.id);
-        else deleteNote(doc, sel.id);
+        else if (sel.kind === "note") deleteNote(doc, sel.id);
+        else assetsMap?.delete(sel.id);
       }
     }, LOCAL_ORIGIN);
     setSelection([]);
@@ -814,7 +918,7 @@ export function Whiteboard({
 
   const fitToScreen = () => {
     if (!strokes || !shapesMap || !notesMap || !canvasRef.current) return;
-    const bounds = computeContentBounds(strokes.toArray(), collectShapes(), collectNotes());
+    const bounds = computeContentBounds(strokes.toArray(), collectShapes(), collectNotes(), collectAssetsY());
     if (!bounds) return;
     setCamera(
       fitBoundsToViewport(bounds, canvasRef.current.clientWidth, canvasRef.current.clientHeight, 48, {
@@ -828,7 +932,7 @@ export function Whiteboard({
 
   const exportOpts = () => {
     if (!strokes || !shapesMap || !notesMap) return null;
-    const bounds = computeContentBounds(strokes.toArray(), collectShapes(), collectNotes()) ?? {
+    const bounds = computeContentBounds(strokes.toArray(), collectShapes(), collectNotes(), collectAssetsY()) ?? {
       minX: 0,
       minY: 0,
       maxX: 800,
@@ -840,8 +944,26 @@ export function Whiteboard({
         strokes: strokes.toArray(),
         shapes: collectShapes(),
         notes: collectNotes(),
+        assets: collectAssetsPlain(),
+        assetImages,
+        background: boardMeta?.background ?? "grid",
+        darkMode: boardMeta?.darkMode ?? false,
       },
     };
+  };
+
+  const exportFrame = (frameId: string) => {
+    const ex = exportOpts();
+    const frame = boardMeta?.frames.find((f) => f.id === frameId);
+    if (!ex || !frame) return;
+    void exportBoardPng(`liveboard-frame-${frame.name}.png`, frameBounds(frame), ex.renderOpts);
+  };
+
+  const goToFrame = (frameId: string) => {
+    const frame = boardMeta?.frames.find((f) => f.id === frameId);
+    const canvas = canvasRef.current;
+    if (!frame || !canvas) return;
+    setCamera(cameraForFrame(frame, canvas.clientWidth, canvas.clientHeight));
   };
 
   const everyone = identity ? [{ clientId: -1, user: identity }, ...peers] : peers;
@@ -930,6 +1052,7 @@ export function Whiteboard({
           data-canvas-id={canvasInstanceId.current}
           data-stroke-count={strokeCount}
           data-shape-count={shapeCount}
+          data-asset-count={assetsMap?.size ?? 0}
           data-camera={`${camera.x},${camera.y},${camera.zoom}`}
           style={{ cursor: cursorStyle, touchAction: "none" }}
           onPointerDown={onPointerDown}
@@ -950,6 +1073,17 @@ export function Whiteboard({
         ) : null}
         <Cursors peers={peers} camera={camera} />
         </div>
+        {compactToolbar ? (
+          <button
+            type="button"
+            className="side-panel-toggle"
+            data-testid="side-panel-toggle"
+            aria-expanded={sidePanelOpen}
+            onClick={() => setSidePanelOpen((o) => !o)}
+          >
+            ⚙
+          </button>
+        ) : null}
         {doc && boardMeta ? (
           <BoardSidePanel
             doc={doc}
@@ -967,6 +1101,32 @@ export function Whiteboard({
             onFollowPresenter={setFollowPresenter}
             isPresenter={isPresenter}
             onPresenter={setIsPresenter}
+            className={compactToolbar && !sidePanelOpen ? "collapsed" : undefined}
+            history={listHistorySnapshots(doc)}
+            onRestoreSnapshot={(snap) => {
+              beginAction();
+              restoreHistorySnapshot(doc, snap);
+              setAssetRevision((n) => n + 1);
+            }}
+            onAddFrame={() => {
+              if (!canvasRef.current) return;
+              const name = prompt("Frame name") ?? "Frame";
+              frameFromViewport(
+                doc,
+                camera,
+                canvasRef.current.clientWidth,
+                canvasRef.current.clientHeight,
+                name,
+              );
+              setMetaRevision((n) => n + 1);
+            }}
+            onGoToFrame={goToFrame}
+            onExportFrame={exportFrame}
+            onToggleLockSelection={() => {
+              for (const sel of selection) toggleLock(doc, sel.id);
+              setMetaRevision((n) => n + 1);
+            }}
+            hasSelection={selection.length > 0}
           />
         ) : null}
       </div>
@@ -979,6 +1139,7 @@ function moveSelection(doc: Y.Doc, selection: SelectableRef[], dx: number, dy: n
   const strokes = getStrokes(doc);
   doc.transact(() => {
     for (const sel of selection) {
+      if (isLocked(doc, sel.id)) continue;
       if (sel.kind === "stroke") {
         for (let i = 0; i < strokes.length; i++) {
           const s = strokes.get(i)!;
@@ -1000,8 +1161,14 @@ function moveSelection(doc: Y.Doc, selection: SelectableRef[], dx: number, dy: n
           m.set("x", Number(m.get("x") ?? 0) + dx);
           m.set("y", Number(m.get("y") ?? 0) + dy);
         }
-      } else {
+      } else if (sel.kind === "note") {
         const m = getNotes(doc).get(sel.id);
+        if (m instanceof Y.Map) {
+          m.set("x", Number(m.get("x") ?? 0) + dx);
+          m.set("y", Number(m.get("y") ?? 0) + dy);
+        }
+      } else {
+        const m = getAssets(doc).get(sel.id);
         if (m instanceof Y.Map) {
           m.set("x", Number(m.get("x") ?? 0) + dx);
           m.set("y", Number(m.get("y") ?? 0) + dy);

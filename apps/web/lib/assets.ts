@@ -38,6 +38,44 @@ export async function compressToBase64(bytes: Uint8Array): Promise<string> {
   return btoa(String.fromCharCode(...buf));
 }
 
+export type YAsset = Y.Map<unknown>;
+
+export function readAsset(m: YAsset): BoardAsset {
+  return {
+    id: String(m.get("id")),
+    mime: String(m.get("mime") ?? "image/png"),
+    dataBase64: String(m.get("dataBase64") ?? ""),
+    x: Number(m.get("x") ?? 0),
+    y: Number(m.get("y") ?? 0),
+    w: Number(m.get("w") ?? 100),
+    h: Number(m.get("h") ?? 100),
+    locked: Boolean(m.get("locked")),
+    z: Number(m.get("z") ?? 0),
+    authorId: String(m.get("authorId") ?? ""),
+  };
+}
+
+export function updateAssetRect(doc: Y.Doc, id: string, patch: Partial<Pick<BoardAsset, "x" | "y" | "w" | "h">>): void {
+  const m = getAssets(doc).get(id);
+  if (!(m instanceof Y.Map)) return;
+  doc.transact(() => {
+    if (patch.x != null) m.set("x", patch.x);
+    if (patch.y != null) m.set("y", patch.y);
+    if (patch.w != null) m.set("w", patch.w);
+    if (patch.h != null) m.set("h", patch.h);
+  }, LOCAL_ORIGIN);
+}
+
+export function setAssetLocked(doc: Y.Doc, id: string, locked: boolean): void {
+  const m = getAssets(doc).get(id);
+  if (!(m instanceof Y.Map)) return;
+  doc.transact(() => m.set("locked", locked), LOCAL_ORIGIN);
+}
+
+export function hitAsset(asset: BoardAsset, wx: number, wy: number): boolean {
+  return wx >= asset.x && wx <= asset.x + asset.w && wy >= asset.y && wy <= asset.y + asset.h;
+}
+
 export function upsertAsset(doc: Y.Doc, asset: BoardAsset): void {
   const payloadBytes = Math.ceil((asset.dataBase64.length * 3) / 4);
   if (payloadBytes > ASSET_MAX_BYTES) {

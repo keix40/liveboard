@@ -1,5 +1,6 @@
 import * as Y from "yjs";
 import { YKEYS } from "@liveboard/shared";
+import { getAssets } from "./assets";
 import { getNotes } from "./notes";
 import { getShapes } from "./shapes";
 import { getStrokes, LOCAL_ORIGIN } from "./strokes";
@@ -8,6 +9,7 @@ export interface PageSnapshot {
   strokes: unknown;
   shapes: unknown;
   notes: unknown;
+  assets: unknown;
 }
 
 export function getPageSnapshots(doc: Y.Doc): Y.Map<unknown> {
@@ -19,6 +21,7 @@ export function capturePageSnapshot(doc: Y.Doc): PageSnapshot {
     strokes: getStrokes(doc).toJSON(),
     shapes: getShapes(doc).toJSON(),
     notes: getNotes(doc).toJSON(),
+    assets: getAssets(doc).toJSON(),
   };
 }
 
@@ -39,7 +42,11 @@ function restoreStrokes(doc: Y.Doc, data: unknown): void {
   }
 }
 
-function restoreMap(doc: Y.Doc, key: typeof YKEYS.shapes | typeof YKEYS.notes, data: unknown): void {
+function restoreMap(
+  doc: Y.Doc,
+  key: typeof YKEYS.shapes | typeof YKEYS.notes | typeof YKEYS.assets,
+  data: unknown,
+): void {
   const map = doc.getMap(key);
   map.forEach((_, k) => map.delete(k));
   const entries = (data && typeof data === "object" ? data : {}) as Record<string, Record<string, unknown>>;
@@ -60,6 +67,7 @@ export function restorePageSnapshot(doc: Y.Doc, snap: PageSnapshot): void {
     restoreStrokes(doc, snap.strokes);
     restoreMap(doc, YKEYS.shapes, snap.shapes);
     restoreMap(doc, YKEYS.notes, snap.notes);
+    restoreMap(doc, YKEYS.assets, snap.assets ?? {});
   }, LOCAL_ORIGIN);
 }
 
@@ -68,7 +76,9 @@ export function switchPage(doc: Y.Doc, fromId: string, toId: string): void {
   doc.transact(() => {
     snaps.set(fromId, JSON.stringify(capturePageSnapshot(doc)));
     const raw = snaps.get(toId);
-    const snap = raw ? (JSON.parse(String(raw)) as PageSnapshot) : { strokes: [], shapes: {}, notes: {} };
+    const snap = raw
+      ? (JSON.parse(String(raw)) as PageSnapshot)
+      : { strokes: [], shapes: {}, notes: {}, assets: {} };
     restorePageSnapshot(doc, snap);
   }, LOCAL_ORIGIN);
 }

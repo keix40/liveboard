@@ -1,10 +1,11 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import type * as Y from "yjs";
 import type { BoardBackground, BoardTemplate, RoomRole } from "@liveboard/shared";
 import { writeBoardMeta, type BoardMeta } from "@/lib/board-meta";
-import { switchPage } from "@/lib/pages";
-import { pushSnapshot } from "@/lib/snapshots";
+import { switchPage, type PageSnapshot } from "@/lib/pages";
+import { pushSnapshot, type HistorySnapshot } from "@/lib/snapshots";
 import { applyTemplate } from "@/lib/templates";
 import { compressToBase64, upsertAsset } from "@/lib/assets";
 import { renderPdfPagesToDataUrls } from "@/lib/pdf-import";
@@ -28,10 +29,32 @@ interface Props {
   onFollowPresenter(v: boolean): void;
   isPresenter: boolean;
   onPresenter(v: boolean): void;
+  className?: string;
+  history: HistorySnapshot[];
+  onRestoreSnapshot(snap: PageSnapshot): void;
+  onAddFrame(): void;
+  onGoToFrame(id: string): void;
+  onExportFrame(id: string): void;
+  onToggleLockSelection(): void;
+  hasSelection: boolean;
 }
 
 export function BoardSidePanel(p: Props) {
   void p.metaRevision;
+  const [scrubIndex, setScrubIndex] = useState(0);
+  const playRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (p.history.length === 0) setScrubIndex(0);
+    else setScrubIndex((i) => Math.min(i, p.history.length - 1));
+  }, [p.history.length]);
+
+  useEffect(
+    () => () => {
+      if (playRef.current) clearInterval(playRef.current);
+    },
+    [],
+  );
   const patchMeta = (patch: Partial<BoardMeta>) => {
     writeBoardMeta(p.doc, patch, LOCAL_ORIGIN);
     p.onMetaRevision();
@@ -62,8 +85,17 @@ export function BoardSidePanel(p: Props) {
     p.onMetaRevision();
   };
 
+  const restoreAt = (index: number) => {
+    const snap = p.history[index];
+    if (!snap) return;
+    p.onRestoreSnapshot(snap.page);
+  };
+
   return (
-    <aside className="board-side-panel" data-testid="board-side-panel">
+    <aside
+      className={`board-side-panel${p.className ? ` ${p.className}` : ""}`}
+      data-testid="board-side-panel"
+    >
       <div className="side-row">
         <label>
           Stabilizer
@@ -155,7 +187,96 @@ export function BoardSidePanel(p: Props) {
         >
           Snapshot
         </button>
+        <button
+          type="button"
+          data-testid="lock-selection"
+          disabled={p.readOnly || !p.hasSelection}
+          onClick={p.onToggleLockSelection}
+        >
+          🔒 Lock
+        </button>
       </div>
+      <div className="side-row side-history">
+        <label className="history-scrub">
+          History
+          <input
+            type="range"
+            min={0}
+            max={Math.max(0, p.history.length - 1)}
+            value={scrubIndex}
+            disabled={p.history.length === 0}
+            data-testid="history-scrub"
+            onChange={(e) => {
+              const idx = Number(e.target.value);
+              setScrubIndex(idx);
+              restoreAt(idx);
+            }}
+          />
+        </label>
+        <button
+          type="button"
+          data-testid="history-restore"
+          disabled={p.readOnly || p.history.length === 0}
+          onClick={() => restoreAt(scrubIndex)}
+        >
+          Restore
+        </button>
+        <button
+          type="button"
+          data-testid="history-play"
+          disabled={p.history.length < 2}
+          onClick={() => {
+            if (playRef.current) {
+              clearInterval(playRef.current);
+              playRef.current = null;
+              return;
+            }
+            let idx = 0;
+            playRef.current = setInterval(() => {
+              restoreAt(idx);
+              setScrubIndex(idx);
+              idx = (idx + 1) % p.history.length;
+            }, 600);
+          }}
+        >
+          ▶ Replay
+        </button>
+      </div>
+      <ul className="history-list" data-testid="history-list">
+        {p.history.map((h, i) => (
+          <li key={h.id}>
+            <button
+              type="button"
+              data-testid="history-item"
+              disabled={p.readOnly}
+              onClick={() => {
+                setScrubIndex(i);
+                restoreAt(i);
+              }}
+            >
+              {h.label}
+            </button>
+          </li>
+        ))}
+      </ul>
+      <div className="side-row">
+        <button type="button" data-testid="frame-add" disabled={p.readOnly} onClick={p.onAddFrame}>
+          + Frame
+        </button>
+      </div>
+      <ul className="frame-list" data-testid="frame-list">
+        {p.meta.frames.map((f) => (
+          <li key={f.id}>
+            <span>{f.name}</span>
+            <button type="button" data-testid="frame-go" onClick={() => p.onGoToFrame(f.id)}>
+              Go
+            </button>
+            <button type="button" data-testid="frame-export" onClick={() => p.onExportFrame(f.id)}>
+              PNG
+            </button>
+          </li>
+        ))}
+      </ul>
       <div className="side-row">
         <label className="file-btn">
           Image
