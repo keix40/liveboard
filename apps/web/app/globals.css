@@ -304,6 +304,22 @@ button { font: inherit; cursor: pointer; }
     min-height: 44px;
     align-items: center;
   }
+  .toolbar .color-picker-wrap input {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .board-hud .pill,
+  .toolbar-scroll.compact + .board-surface .side-panel-toggle,
+  .side-panel-toggle,
+  button.pill[data-testid="copy-link"] {
+    min-width: 44px;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
   .toolbar .swatch {
     padding: 10px;
   }

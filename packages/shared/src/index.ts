@@ -29,11 +29,15 @@ export const YKEYS = {
 export const ASSET_MAX_BYTES = 200_000;
 export const ASSET_ROOM_MAX_BYTES = 600_000;
 export const ASSET_MAX_DECOMPRESSED_BYTES = 400_000;
-export const ASSET_MAX_IMAGE_DIMENSION = 4096;
+export const ASSET_MAX_IMAGE_DIMENSION = 8192;
 export const PDF_MAX_BYTES = 2_000_000;
 export const PDF_MAX_PAGES = 10;
 
 export const MAX_LOCKED_IDS = 500;
+
+/** Server-side room storage budget (sum of applied update payloads; O(1) accounting). */
+export const ROOM_MAX_STORED_BYTES = 8 * 1024 * 1024;
+export const ROOM_MAX_SINGLE_UPDATE_BYTES = 512 * 1024;
 
 export type BoardBackground = "blank" | "grid" | "dots" | "lined";
 export type BoardTemplate = "none" | "kanban" | "mindmap" | "wireframe" | "retro";

@@ -9,6 +9,7 @@ import { signRoomToken } from "../src/auth.js";
 import { createLogger } from "../src/logger.js";
 import { CloseCode, MessageType, parseAppCloseCode } from "@liveboard/shared";
 import * as encoding from "lib0/encoding";
+import * as syncProtocol from "y-protocols/sync";
 
 const SECRET = "test-secret-test-secret-test-secret-123";
 let server: SyncServer;
@@ -92,6 +93,30 @@ describe("sync server", () => {
     const b = await connect("room-persist", await token("room-persist"));
     await waitFor(() => b.provider.synced);
     expect(b.doc.getArray("strokes").length).toBe(12);
+    b.provider.destroy();
+  });
+
+  it("kicks one client on oversize update without blocking others", async () => {
+    const room = `room-reject-${Date.now()}`;
+    const a = await connect(room, await token(room));
+    const b = await connect(room, await token(room));
+    await waitFor(() => a.provider.synced && b.provider.synced);
+    a.doc.getArray<number>("strokes").push([1]);
+    await waitFor(() => b.doc.getArray("strokes").length === 1);
+
+    const ws = a.provider.ws as unknown as WebSocket;
+    const huge = new Uint8Array(600 * 1024);
+    huge[0] = 1;
+    const enc = encoding.createEncoder();
+    encoding.writeVarUint(enc, MessageType.Sync);
+    encoding.writeVarUint(enc, syncProtocol.messageYjsUpdate);
+    encoding.writeVarUint8Array(enc, huge);
+    ws.send(encoding.toUint8Array(enc), { binary: true });
+    await waitFor(() => ws.readyState === WebSocket.CLOSED, 3000);
+
+    b.doc.getArray<number>("strokes").push([2]);
+    await waitFor(() => b.doc.getArray("strokes").length === 2, 5000);
+    expect(b.doc.getArray("strokes").toArray()).toEqual([1, 2]);
     b.provider.destroy();
   });
 

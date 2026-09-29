@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type * as Y from "yjs";
 import type { BoardBackground, BoardTemplate, RoomRole } from "@liveboard/shared";
 import { writeBoardMeta, type BoardMeta } from "@/lib/board-meta";
-import { switchPage, switchPageLocal, type PageSnapshot } from "@/lib/pages";
+import { ensureEmptyPageSnapshot, type PageSnapshot } from "@/lib/pages";
 import { pushSnapshot, type HistorySnapshot } from "@/lib/snapshots";
 import { applyTemplate } from "@/lib/templates";
 import { compressToBase64, upsertAsset } from "@/lib/assets";
@@ -39,12 +39,15 @@ interface Props {
   onExportFrame(id: string): void;
   onToggleLockSelection(): void;
   hasSelection: boolean;
+  activePageId: string;
+  onSwitchPage(nextId: string, fromId: string): void;
 }
 
 export function BoardSidePanel(p: Props) {
   void p.metaRevision;
   const [scrubIndex, setScrubIndex] = useState(0);
   const playRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
 
   useEffect(() => {
     if (p.history.length === 0) setScrubIndex(0);
@@ -65,11 +68,20 @@ export function BoardSidePanel(p: Props) {
   const addPage = () => {
     const id = `page-${crypto.randomUUID().slice(0, 8)}`;
     const order = [...p.meta.pageOrder, id];
-    switchPage(p.doc, p.meta.activePageId, id);
-    patchMeta({ pageOrder: order, activePageId: id });
+    p.doc.transact(() => ensureEmptyPageSnapshot(p.doc, id), LOCAL_ORIGIN);
+    patchMeta({ pageOrder: order });
+    if (p.isPresenter) {
+      p.onSwitchPage(id, p.activePageId);
+    }
   };
 
   const importImage = async (file: File) => {
+    setImportError(null);
+    try {
+      const dims = await readImageDimensions(file);
+      if (dims.w > 8192 || dims.h > 8192) {
+        throw new Error("Image exceeds 8192px on one side");
+      }
     const bytes = new Uint8Array(await file.arrayBuffer());
     const dataBase64 = await compressToBase64(bytes);
     upsertAsset(p.doc, {
@@ -85,6 +97,9 @@ export function BoardSidePanel(p: Props) {
       authorId: p.authorId,
     });
     p.onMetaRevision();
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : "Import failed");
+    }
   };
 
   const previewAt = (index: number) => {
@@ -172,16 +187,10 @@ export function BoardSidePanel(p: Props) {
       <div className="side-row">
         <select
           data-testid="page-select"
-          value={p.meta.activePageId}
+          value={p.activePageId}
           onChange={(e) => {
             const next = e.target.value;
-            if (p.isPresenter) {
-              switchPage(p.doc, p.meta.activePageId, next);
-              patchMeta({ activePageId: next });
-            } else {
-              switchPageLocal(p.doc, next);
-              patchMeta({ activePageId: next });
-            }
+            p.onSwitchPage(next, p.activePageId);
           }}
         >
           {p.meta.pageOrder.map((id) => (
@@ -243,6 +252,7 @@ export function BoardSidePanel(p: Props) {
             if (playRef.current) {
               clearInterval(playRef.current);
               playRef.current = null;
+              p.onClearHistoryPreview();
               return;
             }
             let idx = 0;
@@ -291,6 +301,11 @@ export function BoardSidePanel(p: Props) {
           </li>
         ))}
       </ul>
+      {importError ? (
+        <p className="import-error" data-testid="import-error" role="alert">
+          {importError}
+        </p>
+      ) : null}
       <div className="side-row">
         <label className="file-btn">
           Image
@@ -318,24 +333,29 @@ export function BoardSidePanel(p: Props) {
               const f = e.target.files?.[0];
               if (!f) return;
               void (async () => {
-                const pages = await renderPdfPagesToDataUrls(f);
-                for (let i = 0; i < pages.length; i++) {
-                  const dataUrl = pages[i]!;
-                  const bin = Uint8Array.from(atob(dataUrl.split(",")[1]!), (c) => c.charCodeAt(0));
-                  upsertAsset(p.doc, {
-                    id: crypto.randomUUID(),
-                    mime: "image/png",
-                    dataBase64: await compressToBase64(bin),
-                    x: 80,
-                    y: 80 + i * 40,
-                    w: 640,
-                    h: 480,
-                    locked: true,
-                    z: Date.now() + i,
-                    authorId: p.authorId,
-                  });
+                setImportError(null);
+                try {
+                  const pages = await renderPdfPagesToDataUrls(f);
+                  for (let i = 0; i < pages.length; i++) {
+                    const dataUrl = pages[i]!;
+                    const bin = Uint8Array.from(atob(dataUrl.split(",")[1]!), (c) => c.charCodeAt(0));
+                    upsertAsset(p.doc, {
+                      id: crypto.randomUUID(),
+                      mime: "image/png",
+                      dataBase64: await compressToBase64(bin),
+                      x: 80,
+                      y: 80 + i * 520,
+                      w: 640,
+                      h: 480,
+                      locked: true,
+                      z: Date.now() + i,
+                      authorId: p.authorId,
+                    });
+                  }
+                  p.onMetaRevision();
+                } catch (err) {
+                  setImportError(err instanceof Error ? err.message : "PDF import failed");
                 }
-                p.onMetaRevision();
               })();
             }}
           />
@@ -386,4 +406,20 @@ export function BoardSidePanel(p: Props) {
       </div>
     </aside>
   );
+}
+
+function readImageDimensions(file: File): Promise<{ w: number; h: number }> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve({ w: img.naturalWidth, h: img.naturalHeight });
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Could not read image"));
+    };
+    img.src = url;
+  });
 }

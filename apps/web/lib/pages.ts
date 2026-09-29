@@ -110,6 +110,15 @@ export function switchPageLocal(doc: Y.Doc, toId: string): void {
   doc.transact(() => loadPageContent(doc, toId), LOCAL_ORIGIN);
 }
 
+export function ensureEmptyPageSnapshot(doc: Y.Doc, pageId: string): void {
+  const snaps = getPageSnapshots(doc);
+  if (snaps.has(pageId)) return;
+  snaps.set(
+    pageId,
+    JSON.stringify({ strokes: [], shapes: {}, notes: {}, assets: {} } satisfies PageSnapshot),
+  );
+}
+
 function loadPageContent(doc: Y.Doc, toId: string): void {
   const raw = getPageSnapshots(doc).get(toId);
   const snap = raw

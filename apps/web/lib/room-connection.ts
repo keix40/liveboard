@@ -7,13 +7,23 @@ import { resolveTerminalClose, terminalCloseAction } from "./terminal-close";
 import { createSyncWatchdog } from "./sync-watchdog";
 
 export type ConnectionStatus =
-  | "offline" //       browser has no network; edits go to IndexedDB only
+  | "offline"
   | "connecting"
   | "connected"
-  | "disconnected" //  lost the socket, y-websocket is backing off and retrying
+  | "disconnected"
   | "room-full"
   | "unauthorized"
-  | "connect-failed"; // couldn't sync after retries (auth/network/proxy)
+  | "connect-failed";
+
+export class TokenRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+  ) {
+    super(message);
+  }
+}
 
 export interface RoomConnection {
   doc: Y.Doc;
@@ -29,12 +39,11 @@ export interface RoomConnectionOptions {
   boardPassword?: string | null;
   editCap?: string;
   viewCap?: string;
-  legacyOpen?: boolean;
   onStatus: (s: ConnectionStatus) => void;
   onRole?: (role: RoomRole) => void;
-  /** Max ms after `open` to wait for first successful sync before retrying. */
+  onTokenUserId?: (userId: string) => void;
+  onPasswordRequired?: () => void;
   syncTimeoutMs?: number;
-  /** Max hung-session / auth refresh attempts before showing connect-failed. */
   maxConnectAttempts?: number;
 }
 
@@ -42,27 +51,19 @@ interface TokenResponse {
   token: string;
   expiresAt: number;
   role?: RoomRole;
-  editLinkCap?: string;
-}
-
-function storedEditCap(roomId: string): string {
-  try {
-    return localStorage.getItem(`liveboard:edit:${roomId}`) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function persistEditCap(roomId: string, cap: string): void {
-  try {
-    if (cap) localStorage.setItem(`liveboard:edit:${roomId}`, cap);
-  } catch {
-    /* ignore */
-  }
+  userId?: string;
 }
 
 const DEFAULT_SYNC_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_CONNECT_ATTEMPTS = 3;
+
+function storedEditCap(roomId: string): string {
+  try {
+    return sessionStorage.getItem(`liveboard:edit:${roomId}`) ?? localStorage.getItem(`liveboard:edit:${roomId}`) ?? "";
+  } catch {
+    return "";
+  }
+}
 
 async function fetchRoomToken(
   roomId: string,
@@ -71,30 +72,27 @@ async function fetchRoomToken(
   password?: string | null,
   editCap?: string,
   viewCap?: string,
-  legacyOpen?: boolean,
 ): Promise<TokenResponse> {
   const res = await fetch("/api/token", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       room: roomId,
-      userId: identity.id,
       name: identity.name,
       role,
       password: password ?? "",
       editCap: editCap ?? "",
       viewCap: viewCap ?? "",
-      legacyOpen: legacyOpen === true,
     }),
   });
-  if (res.status === 403) throw new Error("token forbidden");
-  if (!res.ok) throw new Error(`token request failed: ${res.status}`);
+  if (res.status === 403) {
+    const body = (await res.json().catch(() => ({}))) as { code?: string; error?: string };
+    throw new TokenRequestError(body.error ?? "token forbidden", 403, body.code);
+  }
+  if (!res.ok) throw new TokenRequestError(`token request failed: ${res.status}`, res.status);
   return (await res.json()) as TokenResponse;
 }
 
-/**
- * Wires a Y.Doc to (1) IndexedDB for offline-first persistence and (2) the sync server.
- */
 export function createRoomConnection(opts: RoomConnectionOptions): RoomConnection {
   const {
     roomId,
@@ -104,9 +102,10 @@ export function createRoomConnection(opts: RoomConnectionOptions): RoomConnectio
     boardPassword = null,
     editCap = "",
     viewCap = "",
-    legacyOpen = true,
     onStatus,
     onRole,
+    onTokenUserId,
+    onPasswordRequired,
     syncTimeoutMs = DEFAULT_SYNC_TIMEOUT_MS,
     maxConnectAttempts = DEFAULT_MAX_CONNECT_ATTEMPTS,
   } = opts;
@@ -158,19 +157,21 @@ export function createRoomConnection(opts: RoomConnectionOptions): RoomConnectio
   async function refreshToken(connectAfter: boolean) {
     try {
       const cap = editCap || storedEditCap(roomId);
-      const { token, expiresAt, role: mintedRole, editLinkCap } = await fetchRoomToken(
+      const { token, expiresAt, role: mintedRole, userId } = await fetchRoomToken(
         roomId,
         identity,
         role,
         boardPassword,
         cap,
         viewCap,
-        legacyOpen,
       );
       if (destroyed) return;
       tokenFailures = 0;
-      if (editLinkCap) persistEditCap(roomId, editLinkCap);
       if (mintedRole) onRole?.(mintedRole);
+      if (userId) {
+        onTokenUserId?.(userId);
+        provider.awareness.setLocalStateField("user", { ...identity, id: userId });
+      }
       provider.params = { token };
       scheduleRefresh(expiresAt);
       if (connectAfter) {
@@ -178,8 +179,13 @@ export function createRoomConnection(opts: RoomConnectionOptions): RoomConnectio
         syncWatchdog.armConnecting();
         provider.connect();
       }
-    } catch {
+    } catch (err) {
       if (destroyed) return;
+      if (err instanceof TokenRequestError && err.status === 403 && err.code === "password") {
+        onPasswordRequired?.();
+        onStatus("unauthorized");
+        return;
+      }
       onStatus(navigator.onLine ? "disconnected" : "offline");
       const delay = Math.min(30_000, 1000 * 2 ** tokenFailures++);
       clearTimeout(retryTimer);
@@ -219,10 +225,6 @@ export function createRoomConnection(opts: RoomConnectionOptions): RoomConnectio
     }
   });
 
-  provider.on("connection-error", () => {
-    /* y-websocket will retry; server may have sent resync step1 after policy reject */
-  });
-
   provider.on("status", ({ status }) => {
     if (status === "connected") handledTerminalClose = false;
     if (status === "connecting") syncWatchdog.armConnecting();
@@ -239,7 +241,6 @@ export function createRoomConnection(opts: RoomConnectionOptions): RoomConnectio
       return;
     }
     if (event.code === 1006 || event.code === 1000) {
-      // Proxy dropped the close frame; retry with a fresh token up to the cap.
       authRefreshAttempts++;
       if (authRefreshAttempts > maxConnectAttempts) {
         failConnect();

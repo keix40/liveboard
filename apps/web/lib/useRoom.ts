@@ -11,7 +11,6 @@ export interface Peer extends AwarenessState {
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:1234";
 
-/** React binding for a room: connection lifecycle + reactive status and presence. */
 export function useRoom(
   roomId: string,
   opts?: {
@@ -19,7 +18,7 @@ export function useRoom(
     boardPassword?: string | null;
     editCap?: string;
     viewCap?: string;
-    legacyOpen?: boolean;
+    onPasswordRequired?: () => void;
   },
 ) {
   const [conn, setConn] = useState<RoomConnection | null>(null);
@@ -38,9 +37,12 @@ export function useRoom(
       boardPassword: opts?.boardPassword ?? null,
       editCap: opts?.editCap ?? "",
       viewCap: opts?.viewCap ?? "",
-      legacyOpen: opts?.legacyOpen ?? true,
       onStatus: setStatus,
       onRole: setRoomRole,
+      onPasswordRequired: opts?.onPasswordRequired,
+      onTokenUserId: (userId) => {
+        setIdentity({ ...me, id: userId });
+      },
     });
     const awareness = c.provider.awareness;
     const onChange = () => {
@@ -58,7 +60,7 @@ export function useRoom(
       c.destroy();
       setConn(null);
     };
-  }, [roomId, opts?.role, opts?.boardPassword, opts?.editCap, opts?.viewCap, opts?.legacyOpen]);
+  }, [roomId, opts?.role, opts?.boardPassword, opts?.editCap, opts?.viewCap, opts?.onPasswordRequired]);
 
   return { conn, identity, status, peers, roomRole, setRoomRole };
 }

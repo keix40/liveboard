@@ -2,7 +2,30 @@ import * as Y from "yjs";
 import { MAX_LOCKED_IDS } from "@liveboard/shared";
 import { readBoardMeta, writeBoardMeta } from "./board-meta";
 import { getAssets, readAsset } from "./assets";
+import { entityFingerprint } from "./entity-fingerprint";
 import { LOCAL_ORIGIN } from "./strokes";
+
+/** Snapshot locked entity payloads for undo filtering. */
+export function lockedEntityFingerprints(doc: Y.Doc): Map<string, string | null> {
+  const meta = readBoardMeta(doc);
+  const out = new Map<string, string | null>();
+  for (const id of meta.lockedIds) {
+    out.set(id, entityFingerprint(doc, id));
+  }
+  getAssets(doc).forEach((m, id) => {
+    if (m instanceof Y.Map && readAsset(m).locked) {
+      out.set(id, entityFingerprint(doc, id));
+    }
+  });
+  return out;
+}
+
+export function lockedEntitiesMutated(doc: Y.Doc, before: Map<string, string | null>): boolean {
+  for (const [id, fp] of before) {
+    if (entityFingerprint(doc, id) !== fp) return true;
+  }
+  return false;
+}
 
 export function isLocked(doc: Y.Doc, id: string): boolean {
   if (readBoardMeta(doc).lockedIds.includes(id)) return true;

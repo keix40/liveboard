@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { capturePageSnapshot, restorePageSnapshot, switchPage } from "./pages";
+import { capturePageSnapshot, restorePageSnapshot, switchPage, switchPageLocal } from "./pages";
 import { beginStroke, getStrokes, LOCAL_ORIGIN } from "./strokes";
 import { ensureBoardMeta } from "./board-meta";
 
@@ -20,5 +20,13 @@ describe("pages", () => {
     expect(getStrokes(doc).length).toBe(0);
     restorePageSnapshot(doc, snap);
     expect(getStrokes(doc).length).toBe(1);
+  });
+
+  it("switchPageLocal does not require saving the current page to shared meta", () => {
+    const doc = new Y.Doc();
+    ensureBoardMeta(doc, LOCAL_ORIGIN);
+    beginStroke(doc, { id: "s1", authorId: "u", color: "#000", size: 4, first: [1, 1, 0.5] });
+    switchPageLocal(doc, "page-2");
+    expect(getStrokes(doc).length).toBe(0);
   });
 });

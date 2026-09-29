@@ -51,9 +51,9 @@ import { recognizeStrokeShape } from "@/lib/shape-recognize";
 import { getAssets, readAsset, type BoardAsset } from "@/lib/assets";
 import { assetDataToBlobUrl } from "@/lib/asset-decode";
 import { cameraForFrame, frameBounds, frameFromViewport } from "@/lib/frames";
-import { isLocked, toggleLock } from "@/lib/locking";
+import { isLocked, lockedEntitiesMutated, lockedEntityFingerprints, toggleLock } from "@/lib/locking";
 import { listHistorySnapshots, pushSnapshot, restoreHistorySnapshot } from "@/lib/snapshots";
-import { restorePageSnapshot, type PageSnapshot } from "@/lib/pages";
+import { getPageSnapshots, restorePageSnapshot, switchPage, type PageSnapshot } from "@/lib/pages";
 import { getComments, type PinnedComment } from "@/lib/comments";
 import { getReactions, type BoardReaction } from "@/lib/reactions";
 
@@ -83,21 +83,21 @@ export function Whiteboard({
   boardPassword = null,
   editCap = "",
   viewCap = "",
-  claimBoard = false,
+  onPasswordRequired,
 }: {
   roomId: string;
   requestedRole?: RoomRole;
   boardPassword?: string | null;
   editCap?: string;
   viewCap?: string;
-  claimBoard?: boolean;
+  onPasswordRequired?: () => void;
 }) {
   const { conn, identity, status, peers, roomRole } = useRoom(roomId, {
     role: requestedRole,
     boardPassword,
     editCap,
     viewCap,
-    legacyOpen: !editCap,
+    onPasswordRequired,
   });
   const readOnly = roomRole === "viewer";
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -151,11 +151,13 @@ export function Whiteboard({
   const [stabilizer, setStabilizer] = useState(0.35);
   const [shapeRecognize, setShapeRecognize] = useState(false);
   const [historyPreview, setHistoryPreview] = useState<PageSnapshot | null>(null);
+  const [localPageView, setLocalPageView] = useState<PageSnapshot | null>(null);
   const previewDocRef = useRef<Y.Doc | null>(null);
   const strokeHoldStillSinceRef = useRef<number | null>(null);
   const lastStrokeRawRef = useRef<Point | null>(null);
   const [followPresenter, setFollowPresenter] = useState(false);
   const [isPresenter, setIsPresenter] = useState(false);
+  const [localPageId, setLocalPageId] = useState<string | null>(null);
   const [assetImages, setAssetImages] = useState<Map<string, CanvasImageSource>>(new Map());
   const [assetRevision, setAssetRevision] = useState(0);
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
@@ -173,12 +175,14 @@ export function Whiteboard({
   } | null>(null);
 
   const doc = conn?.doc;
-  const renderDoc = historyPreview && previewDocRef.current ? previewDocRef.current : doc;
+  const contentPreview = historyPreview ?? localPageView;
+  const renderDoc = contentPreview && previewDocRef.current ? previewDocRef.current : doc;
   const boardMeta = doc ? readBoardMeta(doc) : null;
-  const strokes = useMemo(() => (renderDoc ? getStrokes(renderDoc) : null), [renderDoc, historyPreview]);
-  const shapesMap = useMemo(() => (renderDoc ? getShapes(renderDoc) : null), [renderDoc, historyPreview]);
-  const notesMap = useMemo(() => (renderDoc ? getNotes(renderDoc) : null), [renderDoc, historyPreview]);
-  const assetsMap = useMemo(() => (renderDoc ? getAssets(renderDoc) : null), [renderDoc, historyPreview]);
+  const activePageId = isPresenter ? (boardMeta?.activePageId ?? "page-1") : (localPageId ?? boardMeta?.activePageId ?? "page-1");
+  const strokes = useMemo(() => (renderDoc ? getStrokes(renderDoc) : null), [renderDoc, contentPreview]);
+  const shapesMap = useMemo(() => (renderDoc ? getShapes(renderDoc) : null), [renderDoc, contentPreview]);
+  const notesMap = useMemo(() => (renderDoc ? getNotes(renderDoc) : null), [renderDoc, contentPreview]);
+  const assetsMap = useMemo(() => (renderDoc ? getAssets(renderDoc) : null), [renderDoc, contentPreview]);
 
   const undo = useMemo(() => {
     if (!doc || !strokes || !shapesMap || !notesMap || !assetsMap) return null;
@@ -188,6 +192,20 @@ export function Whiteboard({
     });
   }, [doc, strokes, shapesMap, notesMap, assetsMap]);
   useEffect(() => () => undo?.destroy(), [undo]);
+
+  const safeUndo = useCallback(() => {
+    if (!doc || !undo) return;
+    const before = lockedEntityFingerprints(doc);
+    undo.undo();
+    if (lockedEntitiesMutated(doc, before)) undo.redo();
+  }, [doc, undo]);
+
+  const safeRedo = useCallback(() => {
+    if (!doc || !undo) return;
+    const before = lockedEntityFingerprints(doc);
+    undo.redo();
+    if (lockedEntitiesMutated(doc, before)) undo.undo();
+  }, [doc, undo]);
 
   const beginAction = useCallback(() => {
     undo?.stopCapturing();
@@ -414,21 +432,13 @@ export function Whiteboard({
   }, [strokes, shapesMap, notesMap, assetsMap, doc, scheduleFrame]);
 
   useEffect(() => {
-    if (!doc || !identity) return;
-    ensureBoardMeta(doc, LOCAL_ORIGIN);
-    if (claimBoard && !readBoardMeta(doc).ownerId) {
-      writeBoardMeta(doc, { ownerId: identity.id }, LOCAL_ORIGIN);
-    }
-  }, [doc, identity, claimBoard]);
-
-  useEffect(() => {
-    if (!doc || !historyPreview) {
+    if (!doc || !contentPreview) {
       previewDocRef.current?.destroy();
       previewDocRef.current = null;
       return;
     }
     const d = new Y.Doc();
-    restorePageSnapshot(d, historyPreview);
+    restorePageSnapshot(d, contentPreview);
     const liveAssets = getAssets(doc);
     getAssets(d).forEach((m, id) => {
       if (!(m instanceof Y.Map)) return;
@@ -444,7 +454,25 @@ export function Whiteboard({
       d.destroy();
       previewDocRef.current = null;
     };
-  }, [historyPreview, doc, scheduleFrame]);
+  }, [contentPreview, doc, scheduleFrame]);
+
+  const loadLocalPageView = useCallback(
+    (pageId: string) => {
+      if (!doc) return;
+      setLocalPageId(pageId);
+      if (isPresenter) {
+        setLocalPageView(null);
+        return;
+      }
+      const raw = getPageSnapshots(doc).get(pageId);
+      const snap = raw
+        ? (JSON.parse(String(raw)) as PageSnapshot)
+        : { strokes: [], shapes: {}, notes: {}, assets: {} };
+      setLocalPageView(snap);
+      setHistoryPreview(null);
+    },
+    [doc, isPresenter],
+  );
 
   useEffect(() => {
     if (!assetsMap) return;
@@ -1000,12 +1028,12 @@ export function Whiteboard({
       if (readOnly) return;
       if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z") return;
       e.preventDefault();
-      if (e.shiftKey) undo?.redo();
-      else undo?.undo();
+      if (e.shiftKey) safeRedo();
+      else safeUndo();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, readOnly]);
+  }, [safeUndo, safeRedo, readOnly]);
 
   const clear = () => {
     if (!doc || !strokes || readOnly) return;
@@ -1148,8 +1176,8 @@ export function Whiteboard({
           onTool={setTool}
           onColor={setColor}
           onSize={setSize}
-          onUndo={() => undo?.undo()}
-          onRedo={() => undo?.redo()}
+          onUndo={() => safeUndo()}
+          onRedo={() => safeRedo()}
           onClear={clear}
           onZoomIn={() =>
             setCamera((cam) =>
@@ -1179,7 +1207,7 @@ export function Whiteboard({
           ref={canvasRef}
           data-testid="board-canvas"
           data-canvas-id={canvasInstanceId.current}
-          data-stroke-count={strokeCount}
+          data-stroke-count={strokes?.length ?? strokeCount}
           data-shape-count={shapeCount}
           data-asset-count={assetsMap?.size ?? 0}
           data-camera={`${camera.x},${camera.y},${camera.zoom}`}
@@ -1230,6 +1258,18 @@ export function Whiteboard({
             onFollowPresenter={setFollowPresenter}
             isPresenter={isPresenter}
             onPresenter={setIsPresenter}
+            activePageId={activePageId}
+            onSwitchPage={(next, from) => {
+              if (isPresenter) {
+                switchPage(doc, from, next);
+                writeBoardMeta(doc, { activePageId: next }, LOCAL_ORIGIN);
+                setLocalPageView(null);
+                setLocalPageId(next);
+                setMetaRevision((n) => n + 1);
+              } else {
+                loadLocalPageView(next);
+              }
+            }}
             className={compactToolbar && !sidePanelOpen ? "collapsed" : undefined}
             history={listHistorySnapshots(doc)}
             onHistoryPreview={(snap) => setHistoryPreview(snap)}

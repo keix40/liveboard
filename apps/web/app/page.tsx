@@ -32,7 +32,7 @@ export default function Home() {
         <button className="btn secondary" type="submit" disabled={!valid}>
           Join
         </button>
-        <button className="btn" type="button" onClick={() => router.push(`/board/${randomRoomId()}`)}>
+        <button className="btn" type="button" onClick={() => router.push(`/board/${randomRoomId()}?new=1`)}>
           New board
         </button>
       </form>
