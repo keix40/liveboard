@@ -30,6 +30,7 @@ export function readNote(m: YNote): StickyNote {
 export function createNote(
   doc: Y.Doc,
   opts: { id: string; authorId: string; x: number; y: number; color: string; z: number },
+  pageId?: string,
 ): YNote {
   const note = new Y.Map<unknown>();
   const yText = new Y.Text();
@@ -47,7 +48,7 @@ export function createNote(
       ["createdAt", Date.now()],
     ];
     for (const [k, v] of fields) note.set(k, v);
-    getNotes(doc).set(opts.id, note);
+    getNotes(doc, pageId).set(opts.id, note);
   }, LOCAL_ORIGIN);
   return note;
 }

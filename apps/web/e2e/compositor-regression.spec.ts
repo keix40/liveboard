@@ -102,21 +102,7 @@ test("sticky notes appear on load and when added remotely to an idle peer", asyn
 
   await a.getByTestId("tool-note").click();
   const canvasA = a.getByTestId("board-canvas");
-  const boxA = (await canvasA.boundingBox())!;
-  await canvasA.dispatchEvent("pointerdown", {
-    pointerId: 1,
-    pointerType: "mouse",
-    button: 0,
-    clientX: boxA.x + 120,
-    clientY: boxA.y + 140,
-  });
-  await canvasA.dispatchEvent("pointerup", {
-    pointerId: 1,
-    pointerType: "mouse",
-    button: 0,
-    clientX: boxA.x + 120,
-    clientY: boxA.y + 140,
-  });
+  await canvasA.click({ position: { x: 120, y: 140 } });
   await expect(a.locator(".sticky-note")).toHaveCount(1, { timeout: 15_000 });
 
   await b.goto(`/board/${room}`);
@@ -138,21 +124,7 @@ test("remote Y.Text edits sync to a peer with the note focused", async ({ browse
 
   await a.getByTestId("tool-note").click();
   const canvas = a.getByTestId("board-canvas");
-  const box = (await canvas.boundingBox())!;
-  await canvas.dispatchEvent("pointerdown", {
-    pointerId: 1,
-    pointerType: "mouse",
-    button: 0,
-    clientX: box.x + 100,
-    clientY: box.y + 100,
-  });
-  await canvas.dispatchEvent("pointerup", {
-    pointerId: 1,
-    pointerType: "mouse",
-    button: 0,
-    clientX: box.x + 100,
-    clientY: box.y + 100,
-  });
+  await canvas.click({ position: { x: 100, y: 100 } });
   await expect(a.locator(".sticky-note")).toHaveCount(1, { timeout: 15_000 });
 
   await expect(b.locator(".sticky-note textarea")).toHaveCount(1, { timeout: 15_000 });

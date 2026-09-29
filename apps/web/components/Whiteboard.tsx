@@ -724,14 +724,18 @@ export function Whiteboard({
 
     if (tool === "note") {
       beginAction();
-      createNote(doc, {
-        id: crypto.randomUUID(),
-        authorId: identity.id,
-        x: world.x,
-        y: world.y,
-        color: color === "#0f172a" ? "#fef08a" : color,
-        z: nextZ(),
-      });
+      createNote(
+        doc,
+        {
+          id: crypto.randomUUID(),
+          authorId: identity.id,
+          x: world.x,
+          y: world.y,
+          color: color === "#0f172a" ? "#fef08a" : color,
+          z: nextZ(),
+        },
+        activePageId,
+      );
       return;
     }
 
