@@ -7,6 +7,8 @@ import { createSyncServer, type SyncServer } from "../src/server.js";
 import { MemoryPersistence } from "../src/persistence/memory.js";
 import { signRoomToken } from "../src/auth.js";
 import { createLogger } from "../src/logger.js";
+import { CloseCode, formatAppCloseReason, MessageType, parseAppCloseCode } from "@liveboard/shared";
+import * as encoding from "lib0/encoding";
 
 const SECRET = "test-secret-test-secret-test-secret-123";
 let server: SyncServer;
@@ -107,14 +109,116 @@ describe("sync server", () => {
   });
 
   it("rejects bad tokens with close code 4401 and wrong-room tokens with 4403", async () => {
-    const closeCode = (room: string, tok: string) =>
-      new Promise<number>((resolve) => {
+    const closeEvent = (room: string, tok: string) =>
+      new Promise<{ code: number; reason: string }>((resolve) => {
         const ws = new WebSocket(`${url}/${room}?token=${tok}`);
-        ws.on("close", (code) => resolve(code));
+        ws.on("close", (code, reason) => resolve({ code, reason: reason.toString() }));
       });
-    expect(await closeCode("room-auth", await token("room-auth", "editor", "x".repeat(40)))).toBe(4401);
-    expect(await closeCode("room-auth", await token("other-room"))).toBe(4403);
-    expect(await closeCode("room-auth", "")).toBe(4401);
+    const badSecret = await closeEvent("room-auth", await token("room-auth", "editor", "x".repeat(40)));
+    expect(badSecret.code).toBe(CloseCode.Unauthorized);
+    expect(parseAppCloseCode(badSecret.code, badSecret.reason)).toBe(CloseCode.Unauthorized);
+
+    const wrongRoom = await closeEvent("room-auth", await token("other-room"));
+    expect(wrongRoom.code).toBe(CloseCode.Forbidden);
+    expect(parseAppCloseCode(wrongRoom.code, wrongRoom.reason)).toBe(CloseCode.Forbidden);
+
+    expect((await closeEvent("room-auth", "")).code).toBe(CloseCode.Unauthorized);
+  });
+
+  it("embeds app close codes in the close reason for proxy-safe auth failures", async () => {
+    const wrongRoom = await new Promise<{ code: number; reason: string }>((resolve) => {
+      void token("other-room").then((tok) => {
+        const ws = new WebSocket(`${url}/room-proxy?token=${encodeURIComponent(tok)}`);
+        ws.on("close", (code, reason) => resolve({ code, reason: reason.toString() }));
+      });
+    });
+    expect(wrongRoom.reason.startsWith(formatAppCloseReason(CloseCode.Forbidden, "x").slice(0, 7))).toBe(true);
+  });
+
+  it("stops processing frames after a kick", async () => {
+    const roomId = "room-kick";
+    const tok = await token(roomId);
+    const editor = await connect(roomId, tok);
+    await waitFor(() => editor.provider.synced);
+
+    const ws = editor.provider.ws as unknown as WebSocket;
+    const before = editor.doc.getArray<number>("strokes").length;
+    ws.send("not-binary", { binary: false });
+    await waitFor(() => ws.readyState === WebSocket.CLOSED);
+
+    const enc = encoding.createEncoder();
+    encoding.writeVarUint(enc, MessageType.QueryAwareness);
+    try {
+      ws.send(encoding.toUint8Array(enc), { binary: true });
+    } catch {
+      /* socket may already be gone */
+    }
+    await new Promise((r) => setTimeout(r, 100));
+    expect(editor.doc.getArray<number>("strokes").length).toBe(before);
+
+    editor.provider.destroy();
+  });
+
+  it("rate-limits a burst in one event-loop turn as a single charge", async () => {
+    const cfg = loadConfig({
+      port: 0,
+      host: "127.0.0.1",
+      jwtSecret: SECRET,
+      persistence: "memory",
+      redisUrl: undefined,
+      allowedOrigins: [],
+      compactEveryNUpdates: 5,
+      roomIdleMs: 50,
+      rateLimit: { msgsPerSec: 1, burst: 1 },
+    });
+    const local = createSyncServer(cfg, { persistence: new MemoryPersistence(), log: createLogger("error") });
+    const port = await local.listen();
+    const localUrl = `ws://127.0.0.1:${port}`;
+    const roomId = "room-rate";
+    const tok = await token(roomId);
+
+    const ws = await new Promise<WebSocket>((resolve) => {
+      const socket = new WebSocket(`${localUrl}/${roomId}?token=${tok}`);
+      socket.on("open", () => resolve(socket));
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    const frame = () => {
+      const enc = encoding.createEncoder();
+      encoding.writeVarUint(enc, MessageType.QueryAwareness);
+      return encoding.toUint8Array(enc);
+    };
+    ws.send(frame(), { binary: true });
+    ws.send(frame(), { binary: true });
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const closed = new Promise<number>((resolve) => ws.on("close", (code) => resolve(code)));
+    ws.send(frame(), { binary: true });
+    expect(await closed).toBe(CloseCode.RateLimited);
+
+    await local.close();
+  });
+
+  it("rejects upgrades without Origin when ALLOWED_ORIGINS is configured", async () => {
+    const cfg = loadConfig({
+      port: 0,
+      host: "127.0.0.1",
+      jwtSecret: SECRET,
+      persistence: "memory",
+      allowedOrigins: ["http://localhost:3000"],
+    });
+    const local = createSyncServer(cfg, { persistence: new MemoryPersistence(), log: createLogger("error") });
+    const port = await local.listen();
+    const err = await new Promise<string>((resolve) => {
+      void token("room-origin").then((tok) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/room-origin?token=${encodeURIComponent(tok)}`);
+        ws.on("unexpected-response", (_req, res) => resolve(String(res.statusCode)));
+        ws.on("error", () => {});
+      });
+    });
+    expect(err).toBe("403");
+    await local.close();
   });
 
   it("rejects invalid room ids at the HTTP layer", async () => {

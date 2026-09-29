@@ -1,8 +1,9 @@
 import * as Y from "yjs";
 import { WebsocketProvider } from "y-websocket";
 import { IndexeddbPersistence } from "y-indexeddb";
-import { CloseCode, type AwarenessState } from "@liveboard/shared";
+import { type AwarenessState } from "@liveboard/shared";
 import type { Identity } from "./identity";
+import { resolveTerminalClose, terminalCloseAction } from "./terminal-close";
 
 export type ConnectionStatus =
   | "offline" //       browser has no network; edits go to IndexedDB only
@@ -66,6 +67,7 @@ export function createRoomConnection(opts: {
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let tokenFailures = 0;
+  let handledTerminalClose = false;
 
   const scheduleRefresh = (expiresAt: number) => {
     clearTimeout(refreshTimer);
@@ -91,17 +93,37 @@ export function createRoomConnection(opts: {
     }
   }
 
+  const applyTerminalClose = (code: number) => {
+    if (handledTerminalClose) return;
+    const action = terminalCloseAction(code);
+    if (!action) return;
+    handledTerminalClose = true;
+    if (action === "refresh-token") void refreshToken(true);
+    else if (action === "retry-rate-limit") {
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => provider.connect(), 5_000);
+    } else if (action === "room-full") onStatus("room-full");
+    else onStatus("unauthorized");
+  };
+
   provider.on("status", ({ status }) => {
+    if (status === "connected") handledTerminalClose = false;
     onStatus(status === "disconnected" && !navigator.onLine ? "offline" : status);
   });
 
-  provider.on("closed", ({ code }) => {
-    if (code === CloseCode.Unauthorized) void refreshToken(true);
-    else if (code === CloseCode.RateLimited) {
-      clearTimeout(retryTimer);
-      retryTimer = setTimeout(() => provider.connect(), 5_000);
-    } else if (code === CloseCode.RoomFull) onStatus("room-full");
-    else onStatus("unauthorized");
+  // Safety net: some proxies strip 440x close codes to 1000/1006; y-websocket then keeps retrying.
+  provider.on("connection-close", (event) => {
+    if (!event) return;
+    const resolved = resolveTerminalClose(event.code, event.reason);
+    if (resolved !== null && event.code < 4400) {
+      provider.shouldConnect = false;
+      applyTerminalClose(resolved);
+    }
+  });
+
+  provider.on("closed", ({ code, reason }) => {
+    const resolved = resolveTerminalClose(code, reason) ?? code;
+    applyTerminalClose(resolved);
   });
 
   const handleOnline = () => {

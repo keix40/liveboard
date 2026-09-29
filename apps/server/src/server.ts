@@ -9,6 +9,7 @@ import { WindowCounter } from "./rate-limit.js";
 import { RoomManager } from "./room-manager.js";
 import { createPersistence, type DocPersistence } from "./persistence/index.js";
 import { createPubSub, type PubSub } from "./pubsub/index.js";
+import { scheduleAppClose } from "./ws-close.js";
 
 export interface SyncServer {
   http: http.Server;
@@ -85,7 +86,7 @@ export function createSyncServer(cfg: ServerConfig, opts: SyncServerOptions = {}
 
     if (!upgradeLimiter.hit(ip)) return rejectHttp(socket, 429, "Too Many Requests");
     if (!isValidRoomId(roomId)) return rejectHttp(socket, 400, "Bad Room Id");
-    if (cfg.allowedOrigins.length > 0 && origin && !cfg.allowedOrigins.includes(origin)) {
+    if (cfg.allowedOrigins.length > 0 && (!origin || !cfg.allowedOrigins.includes(origin))) {
       return rejectHttp(socket, 403, "Origin Not Allowed");
     }
 
@@ -98,7 +99,9 @@ export function createSyncServer(cfg: ServerConfig, opts: SyncServerOptions = {}
     } catch (err) {
       const code = err instanceof AuthError && err.kind === "forbidden" ? CloseCode.Forbidden : CloseCode.Unauthorized;
       log.info("auth rejected", { roomId, ip, reason: (err as Error).message });
-      return wss.handleUpgrade(req, socket, head, (ws) => ws.close(code, "unauthorized"));
+      return wss.handleUpgrade(req, socket, head, (ws) =>
+        scheduleAppClose(ws, code, err instanceof AuthError && err.kind === "forbidden" ? "forbidden" : "unauthorized"),
+      );
     }
 
     let room;
@@ -109,12 +112,12 @@ export function createSyncServer(cfg: ServerConfig, opts: SyncServerOptions = {}
       return rejectHttp(socket, 500, "Room Unavailable");
     }
     if (room.size >= cfg.maxConnectionsPerRoom) {
-      return wss.handleUpgrade(req, socket, head, (ws) => ws.close(CloseCode.RoomFull, "room full"));
+      return wss.handleUpgrade(req, socket, head, (ws) => scheduleAppClose(ws, CloseCode.RoomFull, "room full"));
     }
 
     wss.handleUpgrade(req, socket, head, (ws: Alive) => {
       // Lost a race with idle eviction: ask the client to retry (it reloads the room).
-      if (room.isDestroyed) return ws.close(1013, "try again");
+      if (room.isDestroyed) return scheduleAppClose(ws, 1013, "try again");
       ws.isAlive = true;
       ws.on("pong", () => (ws.isAlive = true));
       room.addClient(ws, user);
