@@ -3,12 +3,15 @@ import type { Logger } from "../logger.js";
 import type { DocPersistence } from "./types.js";
 import { MemoryPersistence } from "./memory.js";
 import { PostgresPersistence } from "./postgres.js";
+import { FilePersistence } from "./file.js";
 
 export type { DocPersistence } from "./types.js";
 export { MemoryPersistence } from "./memory.js";
 export { PostgresPersistence } from "./postgres.js";
+export { FilePersistence } from "./file.js";
 
 export function createPersistence(cfg: ServerConfig, log: Logger): DocPersistence {
   if (cfg.persistence === "postgres") return new PostgresPersistence(cfg.databaseUrl!, log);
+  if (cfg.persistence === "file") return new FilePersistence(cfg.dataDir!, log);
   return new MemoryPersistence();
 }

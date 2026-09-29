@@ -59,17 +59,21 @@ export function isValidRoomId(id: string): boolean {
 export type Point = [x: number, y: number, pressure: number];
 
 /** Plain-object view of a stroke. In the Y.Doc, `points` is a Y.Array<number> (flat x,y,p,...). */
+export type StrokeVariant = "pen" | "highlighter";
+
 export interface Stroke {
   id: string;
   authorId: string;
   color: string;
   size: number;
+  /** Defaults to pen when absent (legacy boards). */
+  variant?: StrokeVariant;
   points: Point[];
   createdAt: number;
 }
-export type StrokeField = "id" | "authorId" | "color" | "size" | "points" | "createdAt";
+export type StrokeField = "id" | "authorId" | "color" | "size" | "variant" | "points" | "createdAt";
 
-export type ShapeKind = "rect" | "ellipse" | "line" | "arrow";
+export type ShapeKind = "rect" | "ellipse" | "line" | "arrow" | "text";
 export interface Shape {
   id: string;
   kind: ShapeKind;
@@ -81,6 +85,8 @@ export interface Shape {
   stroke: string;
   fill: string | null;
   strokeWidth: number;
+  /** Populated when kind === "text". */
+  text?: string;
   z: number;
   authorId: string;
   createdAt: number;
@@ -104,7 +110,17 @@ export type NoteField = keyof StickyNote;
 
 // ─── Presence (awareness) ─────────────────────────────────────────────────
 
-export type Tool = "pen" | "eraser" | "rect" | "ellipse" | "note" | "select";
+export type Tool =
+  | "pen"
+  | "highlighter"
+  | "eraser"
+  | "rect"
+  | "ellipse"
+  | "line"
+  | "arrow"
+  | "text"
+  | "note"
+  | "select";
 
 /** Ephemeral per-client state broadcast via the Yjs awareness protocol. Never persisted. */
 export interface AwarenessState {

@@ -8,7 +8,14 @@ export default defineConfig({
   testDir: "./e2e",
   timeout: 30_000,
   use: { baseURL: "http://localhost:3000", trace: "on-first-retry" },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
+    {
+      name: "mobile",
+      testMatch: /mobile\.spec\.ts/,
+      use: { ...devices["iPhone 13"], browserName: "chromium" },
+    },
+  ],
   webServer: [
     {
       command: "pnpm --filter @liveboard/server dev",

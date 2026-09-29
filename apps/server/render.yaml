@@ -25,7 +25,9 @@ services:
       - key: ALLOWED_ORIGINS
         sync: false
       - key: PERSISTENCE
-        value: memory
+        value: file
+      - key: DATA_DIR
+        value: /var/data/liveboard
       - key: COMPACT_EVERY_N_UPDATES
         value: "500"
 
