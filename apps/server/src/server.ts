@@ -50,6 +50,26 @@ export function createSyncServer(cfg: ServerConfig, opts: SyncServerOptions = {}
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://internal");
+    if (url.pathname.startsWith("/internal/rooms/") && url.pathname.endsWith("/has-content")) {
+      const secret = cfg.internalSecret;
+      const hdr = req.headers["x-liveboard-internal"];
+      const token = Array.isArray(hdr) ? hdr[0] : hdr;
+      if (!secret || token !== secret) {
+        res.writeHead(403, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "forbidden" }));
+        return;
+      }
+      const roomId = decodeURIComponent(url.pathname.slice("/internal/rooms/".length, -"/has-content".length));
+      if (!isValidRoomId(roomId)) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid room" }));
+        return;
+      }
+      const hasContent = await persistence.roomHasContent(roomId);
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ hasContent }));
+      return;
+    }
     if (url.pathname === "/healthz") {
       const body: HealthResponse = {
         status: "ok",

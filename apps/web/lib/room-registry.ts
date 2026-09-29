@@ -1,6 +1,5 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import pg from "pg";
-import { editCapability } from "./capabilities-server";
 
 export interface RoomRegistryRow {
   roomId: string;
@@ -23,6 +22,10 @@ function getPool(): pg.Pool | null {
 
 export function hashEditCapability(cap: string): string {
   return createHash("sha256").update(cap).digest("hex");
+}
+
+export function generateRoomEditSecret(): string {
+  return randomBytes(32).toString("base64url");
 }
 
 export async function initRoomRegistrySchema(): Promise<void> {
@@ -52,9 +55,9 @@ export async function getRoomRecord(roomId: string): Promise<RoomRegistryRow | n
   return { roomId: row.room_id, editCapHash: row.edit_cap_hash, createdAt: row.created_at };
 }
 
-/** Returns edit capability once for a newly registered room. */
-export async function createRoomRecord(roomId: string, secret: string): Promise<{ editCap: string } | { error: "exists" }> {
-  const editCap = editCapability(roomId, secret);
+/** Returns edit capability once for a newly registered room. Race-safe insert. */
+export async function createRoomRecord(roomId: string): Promise<{ editCap: string } | { error: "exists" }> {
+  const editCap = generateRoomEditSecret();
   const editCapHash = hashEditCapability(editCap);
   const p = getPool();
   if (!p) {
@@ -62,25 +65,15 @@ export async function createRoomRecord(roomId: string, secret: string): Promise<
     memory.set(roomId, editCapHash);
     return { editCap };
   }
-  try {
-    await p.query("INSERT INTO liveboard_rooms (room_id, edit_cap_hash) VALUES ($1, $2)", [roomId, editCapHash]);
-    return { editCap };
-  } catch (err: unknown) {
-    if (err && typeof err === "object" && "code" in err && (err as { code: string }).code === "23505") {
-      return { error: "exists" };
-    }
-    throw err;
-  }
+  const res = await p.query(
+    "INSERT INTO liveboard_rooms (room_id, edit_cap_hash) VALUES ($1, $2) ON CONFLICT (room_id) DO NOTHING",
+    [roomId, editCapHash],
+  );
+  if (res.rowCount === 0) return { error: "exists" };
+  return { editCap };
 }
 
-export function verifyEditCapability(roomId: string, secret: string, editCap: string, storedHash: string): boolean {
-  const expected = editCapability(roomId, secret);
-  if (editCap.length !== expected.length) return false;
-  try {
-    if (!timingSafeEqual(Buffer.from(editCap), Buffer.from(expected))) return false;
-  } catch {
-    return false;
-  }
+export function verifyEditCapability(editCap: string, storedHash: string): boolean {
   const hash = hashEditCapability(editCap);
   if (hash.length !== storedHash.length) return false;
   try {

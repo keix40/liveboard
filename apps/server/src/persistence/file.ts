@@ -78,5 +78,20 @@ export class FilePersistence implements DocPersistence {
     }
   }
 
+  async roomHasContent(roomId: string): Promise<boolean> {
+    try {
+      await readFile(this.snapshotPath(roomId));
+      return true;
+    } catch {
+      /* no snapshot */
+    }
+    try {
+      const files = await readdir(this.updatesDir(roomId));
+      return files.some((f) => f.endsWith(".bin"));
+    } catch {
+      return false;
+    }
+  }
+
   async close(): Promise<void> {}
 }

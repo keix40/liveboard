@@ -10,7 +10,7 @@
  *   └── "meta"    : Y.Map<unknown>                board title, createdAt, schemaVersion
  */
 
-export const DOC_SCHEMA_VERSION = 2;
+export const DOC_SCHEMA_VERSION = 3;
 
 /** Top-level shared type names inside the Y.Doc. */
 export const YKEYS = {
@@ -18,6 +18,7 @@ export const YKEYS = {
   shapes: "shapes",
   notes: "notes",
   meta: "meta",
+  pages: "pages",
   pageSnapshots: "pageSnapshots",
   assets: "assets",
   snapshots: "snapshots",
@@ -81,6 +82,7 @@ export const CloseCode = {
   Forbidden: 4403,
   RoomFull: 4429,
   RateLimited: 4408,
+  RoomStorageCap: 4410,
 } as const;
 
 /** Room ids are URL-safe so they can live in the WS path: wss://host/<roomId> */

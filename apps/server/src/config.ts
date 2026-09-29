@@ -39,6 +39,8 @@ export interface ServerConfig {
   /** Max upgrade attempts per IP per minute. */
   upgradesPerIpPerMin: number;
   logLevel: "debug" | "info" | "warn" | "error";
+  /** Shared secret for /internal/* HTTP routes (room content probes from web app). */
+  internalSecret?: string;
 }
 
 export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
@@ -67,6 +69,7 @@ export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     heartbeatMs: int("HEARTBEAT_MS", 30_000),
     upgradesPerIpPerMin: int("UPGRADES_PER_IP_PER_MIN", 60),
     logLevel: (process.env.LOG_LEVEL as ServerConfig["logLevel"]) ?? "info",
+    internalSecret: process.env.LIVEBOARD_INTERNAL_SECRET || undefined,
     ...overrides,
   };
 

@@ -11,7 +11,7 @@ import type { Logger } from "./logger.js";
 import { PerTurnTokenBucket, TokenBucket } from "./rate-limit.js";
 import { forceCloseWebSocket } from "./ws-close.js";
 import { encodeAwareness, encodeSyncStep1, encodeUpdate } from "./protocol.js";
-import { incomingUpdateAllowed, recordAppliedUpdate, type RoomStorageState } from "./room-storage.js";
+import { incomingUpdateAllowed, rebaseRoomStorage, type RoomStorageState } from "./room-storage.js";
 
 /** Transaction origins that must NOT be re-persisted / re-published. */
 export const PERSISTENCE_ORIGIN = Symbol("persistence");
@@ -71,7 +71,7 @@ export class Room {
     const state = await deps.persistence.load(id);
     if (state) {
       Y.applyUpdate(room.doc, state, PERSISTENCE_ORIGIN);
-      room.storage.storedBytes = state.byteLength;
+      rebaseRoomStorage(room.storage, room.doc);
     }
     room.unsubscribe = await deps.pubsub.subscribe(id, room.onRemote);
     deps.log.debug("room loaded", { roomId: id, bytes: state?.byteLength ?? 0 });
@@ -163,14 +163,16 @@ export class Room {
           client.syncComplete = true;
           break;
         }
+        rebaseRoomStorage(this.storage, this.doc);
         const gate = incomingUpdateAllowed(this.storage, update.byteLength);
         if (!gate.ok) {
           this.deps.log.warn("dropped update", { roomId: this.id, reason: gate.reason, bytes: update.byteLength });
-          this.kick(client, CloseCode.MessageTooBig, gate.reason);
+          const code = gate.reason === "room_storage_cap" ? CloseCode.RoomStorageCap : CloseCode.MessageTooBig;
+          this.kick(client, code, gate.reason);
           return;
         }
         Y.applyUpdate(this.doc, update, client.ws);
-        recordAppliedUpdate(this.storage, update.byteLength);
+        rebaseRoomStorage(this.storage, this.doc);
         break;
       }
       default:
@@ -239,8 +241,10 @@ export class Room {
 
   private onRemote = (msg: RoomBroadcast): void => {
     try {
-      if (msg.kind === "update") Y.applyUpdate(this.doc, msg.data, REMOTE_ORIGIN);
-      else awarenessProtocol.applyAwarenessUpdate(this.awareness, msg.data, REMOTE_ORIGIN);
+      if (msg.kind === "update") {
+        Y.applyUpdate(this.doc, msg.data, REMOTE_ORIGIN);
+        rebaseRoomStorage(this.storage, this.doc);
+      } else awarenessProtocol.applyAwarenessUpdate(this.awareness, msg.data, REMOTE_ORIGIN);
     } catch (err) {
       this.deps.log.warn("bad remote message", { roomId: this.id, err: (err as Error).message });
     }
@@ -272,6 +276,7 @@ export class Room {
     this.track(
       Promise.allSettled(inFlight)
         .then(() => this.deps.persistence.compact(this.id))
+        .then(() => rebaseRoomStorage(this.storage, this.doc))
         .finally(() => (this.compacting = false)),
     );
   }

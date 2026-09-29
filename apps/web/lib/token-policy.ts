@@ -28,7 +28,7 @@ export function evaluateTokenAccess(params: {
   }
 
   if (!legacyOpen) {
-    if (!record || !editCap || !verifyEditCapability(room, jwtSecret, editCap, record.editCapHash)) {
+    if (!record || !editCap || !verifyEditCapability(editCap, record.editCapHash)) {
       return { ok: false, error: "edit capability required" };
     }
   }

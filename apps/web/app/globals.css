@@ -339,6 +339,13 @@ button { font: inherit; cursor: pointer; }
   .board-side-panel label input[type="range"] {
     min-height: 44px;
   }
+  .board-side-panel label:has(input[type="checkbox"]) {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 4px;
+  }
 }
 .toolbar .sep { width: 1px; height: 24px; background: #e2e8f0; margin: 0 2px; flex-shrink: 0; }
 .toolbar button.tool { padding: 4px 10px; border-radius: 8px; border: 1px solid transparent; background: transparent; flex-shrink: 0; }

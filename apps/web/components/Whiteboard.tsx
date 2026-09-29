@@ -53,7 +53,7 @@ import { assetDataToBlobUrl } from "@/lib/asset-decode";
 import { cameraForFrame, frameBounds, frameFromViewport } from "@/lib/frames";
 import { isLocked, lockedEntitiesMutated, lockedEntityFingerprints, toggleLock } from "@/lib/locking";
 import { listHistorySnapshots, pushSnapshot, restoreHistorySnapshot } from "@/lib/snapshots";
-import { getPageSnapshots, restorePageSnapshot, switchPage, type PageSnapshot } from "@/lib/pages";
+import { restorePageSnapshot, type PageSnapshot } from "@/lib/pages";
 import { getComments, type PinnedComment } from "@/lib/comments";
 import { getReactions, type BoardReaction } from "@/lib/reactions";
 
@@ -65,6 +65,7 @@ const STATUS_LABEL: Record<string, string> = {
   "room-full": "Room is full",
   unauthorized: "Access denied",
   "connect-failed": "Couldn't connect — check link or try again",
+  "room-storage-cap": "Board storage limit reached — remove content or contact the owner",
 };
 
 const SHAPE_TOOLS = new Set<DrawTool>(["rect", "ellipse", "line", "arrow"]);
@@ -83,14 +84,20 @@ export function Whiteboard({
   boardPassword = null,
   editCap = "",
   viewCap = "",
+  shareLinks = null,
+  editAccessBanner = null,
   onPasswordRequired,
+  onEditAccessDenied,
 }: {
   roomId: string;
   requestedRole?: RoomRole;
   boardPassword?: string | null;
   editCap?: string;
   viewCap?: string;
+  shareLinks?: { editLink: string; viewLink: string } | null;
+  editAccessBanner?: string | null;
   onPasswordRequired?: () => void;
+  onEditAccessDenied?: (message: string) => void;
 }) {
   const { conn, identity, status, peers, roomRole } = useRoom(roomId, {
     role: requestedRole,
@@ -98,6 +105,7 @@ export function Whiteboard({
     editCap,
     viewCap,
     onPasswordRequired,
+    onEditAccessDenied,
   });
   const readOnly = roomRole === "viewer";
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -151,7 +159,6 @@ export function Whiteboard({
   const [stabilizer, setStabilizer] = useState(0.35);
   const [shapeRecognize, setShapeRecognize] = useState(false);
   const [historyPreview, setHistoryPreview] = useState<PageSnapshot | null>(null);
-  const [localPageView, setLocalPageView] = useState<PageSnapshot | null>(null);
   const previewDocRef = useRef<Y.Doc | null>(null);
   const strokeHoldStillSinceRef = useRef<number | null>(null);
   const lastStrokeRawRef = useRef<Point | null>(null);
@@ -175,14 +182,26 @@ export function Whiteboard({
   } | null>(null);
 
   const doc = conn?.doc;
-  const contentPreview = historyPreview ?? localPageView;
+  const contentPreview = historyPreview;
   const renderDoc = contentPreview && previewDocRef.current ? previewDocRef.current : doc;
   const boardMeta = doc ? readBoardMeta(doc) : null;
   const activePageId = isPresenter ? (boardMeta?.activePageId ?? "page-1") : (localPageId ?? boardMeta?.activePageId ?? "page-1");
-  const strokes = useMemo(() => (renderDoc ? getStrokes(renderDoc) : null), [renderDoc, contentPreview]);
-  const shapesMap = useMemo(() => (renderDoc ? getShapes(renderDoc) : null), [renderDoc, contentPreview]);
-  const notesMap = useMemo(() => (renderDoc ? getNotes(renderDoc) : null), [renderDoc, contentPreview]);
-  const assetsMap = useMemo(() => (renderDoc ? getAssets(renderDoc) : null), [renderDoc, contentPreview]);
+  const strokes = useMemo(
+    () => (renderDoc ? getStrokes(renderDoc, contentPreview ? undefined : activePageId) : null),
+    [renderDoc, contentPreview, activePageId],
+  );
+  const shapesMap = useMemo(
+    () => (renderDoc ? getShapes(renderDoc, contentPreview ? undefined : activePageId) : null),
+    [renderDoc, contentPreview, activePageId],
+  );
+  const notesMap = useMemo(
+    () => (renderDoc ? getNotes(renderDoc, contentPreview ? undefined : activePageId) : null),
+    [renderDoc, contentPreview, activePageId],
+  );
+  const assetsMap = useMemo(
+    () => (renderDoc ? getAssets(renderDoc, contentPreview ? undefined : activePageId) : null),
+    [renderDoc, contentPreview, activePageId],
+  );
 
   const undo = useMemo(() => {
     if (!doc || !strokes || !shapesMap || !notesMap || !assetsMap) return null;
@@ -263,6 +282,22 @@ export function Whiteboard({
 
   const [reactionsRevision, setReactionsRevision] = useState(0);
   const [commentsRevision, setCommentsRevision] = useState(0);
+  const panelComments = useMemo(() => {
+    if (!doc) return [];
+    void commentsRevision;
+    const out: { id: string; text: string; x: number; y: number }[] = [];
+    getComments(doc).forEach((m, id) => {
+      if (m instanceof Y.Map) {
+        out.push({
+          id,
+          text: String(m.get("text") ?? ""),
+          x: Number(m.get("x") ?? 0),
+          y: Number(m.get("y") ?? 0),
+        });
+      }
+    });
+    return out;
+  }, [doc, commentsRevision]);
 
   const buildRenderOpts = useCallback(() => {
     const canvas = canvasRef.current!;
@@ -415,8 +450,8 @@ export function Whiteboard({
       metaMap.observe(onMeta);
       ensureBoardMeta(doc, LOCAL_ORIGIN);
     }
-    setStrokeCount(strokes.length);
-    setShapeCount(shapesMap.size);
+    setStrokeCount((n) => (n === strokes.length ? n : strokes.length));
+    setShapeCount((n) => (n === shapesMap.size ? n : shapesMap.size));
     scheduleFrame(true);
     return () => {
       strokes.unobserveDeep(onStrokesDeep);
@@ -455,24 +490,6 @@ export function Whiteboard({
       previewDocRef.current = null;
     };
   }, [contentPreview, doc, scheduleFrame]);
-
-  const loadLocalPageView = useCallback(
-    (pageId: string) => {
-      if (!doc) return;
-      setLocalPageId(pageId);
-      if (isPresenter) {
-        setLocalPageView(null);
-        return;
-      }
-      const raw = getPageSnapshots(doc).get(pageId);
-      const snap = raw
-        ? (JSON.parse(String(raw)) as PageSnapshot)
-        : { strokes: [], shapes: {}, notes: {}, assets: {} };
-      setLocalPageView(snap);
-      setHistoryPreview(null);
-    },
-    [doc, isPresenter],
-  );
 
   useEffect(() => {
     if (!assetsMap) return;
@@ -587,14 +604,14 @@ export function Whiteboard({
   const abandonProvisionalInk = useCallback(() => {
     clearTouchStrokePending();
     if (!doc || !drawing.current) return;
-    discardProvisionalStroke(doc, drawing.current);
+    discardProvisionalStroke(doc, drawing.current, activePageId);
     pointBatcher.current?.dispose();
     pointBatcher.current = null;
     drawing.current = null;
     strokePointerIdRef.current = null;
     localLiveStrokeIndexRef.current = null;
     scheduleFrame(true);
-  }, [clearTouchStrokePending, doc, scheduleFrame]);
+  }, [activePageId, clearTouchStrokePending, doc, scheduleFrame]);
 
   const startPenStroke = useCallback(
     (pointerId: number, world: { x: number; y: number }, pressure: number) => {
@@ -608,15 +625,16 @@ export function Whiteboard({
         size,
         variant: tool === "highlighter" ? "highlighter" : "pen",
         first: [world.x, world.y, pressure || 0.5],
+        pageId: activePageId,
       });
       drawing.current = points;
       strokePointerIdRef.current = pointerId;
-      localLiveStrokeIndexRef.current = getStrokes(doc).length - 1;
+      localLiveStrokeIndexRef.current = getStrokes(doc, activePageId).length - 1;
       pointBatcher.current?.dispose();
       pointBatcher.current = new StrokePointBatcher(doc, points);
       scheduleFrame(true);
     },
-    [beginAction, clearTouchStrokePending, color, doc, identity, scheduleFrame, size, tool],
+    [activePageId, beginAction, clearTouchStrokePending, color, doc, identity, scheduleFrame, size, tool],
   );
 
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -678,7 +696,7 @@ export function Whiteboard({
 
     if (tool === "eraser") {
       beginAction();
-      eraseAtWorld(doc, world.x, world.y, size);
+      eraseAtWorld(doc, world.x, world.y, size, activePageId);
       drawing.current = new Y.Array();
       strokePointerIdRef.current = e.pointerId;
       return;
@@ -715,7 +733,7 @@ export function Whiteboard({
         z: nextZ(),
         authorId: identity.id,
         createdAt: Date.now(),
-      });
+      }, activePageId);
       return;
     }
 
@@ -857,7 +875,7 @@ export function Whiteboard({
     );
 
     if (tool === "eraser") {
-      for (const p of pts) eraseAtWorld(doc, p[0], p[1], size);
+      for (const p of pts) eraseAtWorld(doc, p[0], p[1], size, activePageId);
     } else {
       for (const raw of pts) {
         lastStrokeRawRef.current = raw;
@@ -923,7 +941,7 @@ export function Whiteboard({
           z: nextZ(),
           authorId: identity.id,
           createdAt: Date.now(),
-        });
+        }, activePageId);
       }
       shapeStartRef.current = null;
       previewShapeRef.current = null;
@@ -980,7 +998,7 @@ export function Whiteboard({
           if (!isLocked(doc, s.id)) {
             const recognized = recognizeStrokeShape(s.points);
             if (recognized && recognized.confidence > 0.75 && s.points.length >= 12) {
-              deleteStrokeById(doc, s.id);
+              deleteStrokeById(doc, s.id, activePageId);
               upsertShape(doc, {
                 id: crypto.randomUUID(),
                 kind: recognized.kind,
@@ -995,7 +1013,7 @@ export function Whiteboard({
                 z: nextZ(),
                 authorId: identity.id,
                 createdAt: Date.now(),
-              });
+              }, activePageId);
             }
           }
         }
@@ -1063,7 +1081,7 @@ export function Whiteboard({
     doc.transact(() => {
       for (const sel of selection) {
         if (isLocked(doc, sel.id)) continue;
-        if (sel.kind === "stroke") deleteStrokeById(doc, sel.id);
+        if (sel.kind === "stroke") deleteStrokeById(doc, sel.id, activePageId);
         else if (sel.kind === "shape") deleteShape(doc, sel.id);
         else if (sel.kind === "note") deleteNote(doc, sel.id);
         else assetsMap?.delete(sel.id);
@@ -1145,8 +1163,17 @@ export function Whiteboard({
                 </span>
               ))}
             </div>
-            <button type="button" className="pill" data-testid="copy-link" onClick={() => void navigator.clipboard.writeText(window.location.href)}>
-              🔗 Copy link
+            <button
+              type="button"
+              className="pill"
+              data-testid="copy-link"
+              onClick={() =>
+                void navigator.clipboard.writeText(
+                  shareLinks?.viewLink ?? `${window.location.origin}/board/${roomId}?view=1`,
+                )
+              }
+            >
+              🔗 Copy view link
             </button>
           </div>
         ) : null}
@@ -1259,17 +1286,17 @@ export function Whiteboard({
             isPresenter={isPresenter}
             onPresenter={setIsPresenter}
             activePageId={activePageId}
-            onSwitchPage={(next, from) => {
+            onSwitchPage={(next) => {
               if (isPresenter) {
-                switchPage(doc, from, next);
                 writeBoardMeta(doc, { activePageId: next }, LOCAL_ORIGIN);
-                setLocalPageView(null);
-                setLocalPageId(next);
-                setMetaRevision((n) => n + 1);
-              } else {
-                loadLocalPageView(next);
               }
+              setLocalPageId(next);
+              setHistoryPreview(null);
+              setMetaRevision((n) => n + 1);
             }}
+            shareLinks={shareLinks}
+            editAccessBanner={editAccessBanner}
+            comments={panelComments}
             className={compactToolbar && !sidePanelOpen ? "collapsed" : undefined}
             history={listHistorySnapshots(doc)}
             onHistoryPreview={(snap) => setHistoryPreview(snap)}

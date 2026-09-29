@@ -1,11 +1,12 @@
 import * as Y from "yjs";
-import { YKEYS, type NoteField, type StickyNote } from "@liveboard/shared";
+import { type NoteField, type StickyNote } from "@liveboard/shared";
+import { getPageContent } from "./page-model";
 import { LOCAL_ORIGIN } from "./strokes";
 
 export type YNote = Y.Map<unknown>;
 
-export function getNotes(doc: Y.Doc): Y.Map<YNote> {
-  return doc.getMap(YKEYS.notes);
+export function getNotes(doc: Y.Doc, pageId?: string): Y.Map<YNote> {
+  return getPageContent(doc, pageId).notes as Y.Map<YNote>;
 }
 
 export function readNote(m: YNote): StickyNote {

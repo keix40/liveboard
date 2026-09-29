@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { beginStroke, eraseAt, extendStroke, flatToPoints, getStrokes, readStroke, strokePath } from "./strokes";
+import { writeBoardMeta } from "./board-meta";
+import { ensurePage } from "./page-model";
+import { beginStroke, eraseAt, extendStroke, flatToPoints, getStrokes, LOCAL_ORIGIN, readStroke, strokePath } from "./strokes";
 
 const sync = (a: Y.Doc, b: Y.Doc) => {
   Y.applyUpdate(b, Y.encodeStateAsUpdate(a, Y.encodeStateVector(b)));
@@ -31,14 +33,33 @@ describe("strokes", () => {
   it("converges when two peers draw concurrently (CRDT)", () => {
     const a = new Y.Doc();
     const b = new Y.Doc();
-    const pa = beginStroke(a, { id: "s1", authorId: "a", color: "#f00", size: 6, first: [0, 0, 0.5] });
-    beginStroke(b, { id: "s2", authorId: "b", color: "#00f", size: 6, first: [50, 50, 0.5] });
+    for (const doc of [a, b]) {
+      writeBoardMeta(doc, { activePageId: "page-1", pageOrder: ["page-1"] }, LOCAL_ORIGIN);
+      ensurePage(doc, "page-1");
+    }
+    Y.applyUpdate(b, Y.encodeStateAsUpdate(a));
+    const pa = beginStroke(a, {
+      id: "s1",
+      authorId: "a",
+      color: "#f00",
+      size: 6,
+      first: [0, 0, 0.5],
+      pageId: "page-1",
+    });
+    beginStroke(b, {
+      id: "s2",
+      authorId: "b",
+      color: "#00f",
+      size: 6,
+      first: [50, 50, 0.5],
+      pageId: "page-1",
+    });
     extendStroke(a, pa, [5, 5, 0.5]);
     sync(a, b);
-    const ids = (d: Y.Doc) => getStrokes(d).map((s) => readStroke(s).id).sort();
+    const ids = (d: Y.Doc) => getStrokes(d, "page-1").map((s) => readStroke(s).id).sort();
     expect(ids(a)).toEqual(["s1", "s2"]);
     expect(ids(b)).toEqual(ids(a));
-    expect(readStroke(getStrokes(b).toArray().find((s) => s.get("id") === "s1")!).points).toHaveLength(2);
+    expect(readStroke(getStrokes(b, "page-1").toArray().find((s) => s.get("id") === "s1")!).points).toHaveLength(2);
   });
 
   it("erases strokes under the pointer", () => {

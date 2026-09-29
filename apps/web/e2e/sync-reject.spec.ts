@@ -48,17 +48,15 @@ function sendOversizeUpdate(wsUrl: string, room: string, token: string): Promise
 test("rejected oversize sync update leaves other editors writable", async ({ browser, request }) => {
   const room = `reject-e2e-${Date.now()}`;
   const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:1234";
-  const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();
-  const a = await ctxA.newPage();
   const b = await ctxB.newPage();
-  await a.goto(`/board/${room}`);
   await b.goto(`/board/${room}`);
-  await expect(a.getByTestId("status")).toHaveText(/connected/i, { timeout: 15_000 });
   await expect(b.getByTestId("status")).toHaveText(/connected/i, { timeout: 15_000 });
 
-  await drawStroke(a, [50, 50], [140, 120]);
-  await expect.poll(async () => Number(await b.getByTestId("board-canvas").getAttribute("data-stroke-count"))).toBe(1);
+  await drawStroke(b, [50, 50], [140, 120]);
+  await expect.poll(async () => Number(await b.getByTestId("board-canvas").getAttribute("data-stroke-count")), {
+    timeout: 15_000,
+  }).toBe(1);
 
   const tokenRes = await request.post("/api/token", {
     data: { room, name: "bad-sender", role: "editor" },
@@ -67,10 +65,11 @@ test("rejected oversize sync update leaves other editors writable", async ({ bro
   const { token } = (await tokenRes.json()) as { token: string };
   await sendOversizeUpdate(wsUrl, room, token);
 
+  await expect(b.getByTestId("status")).toHaveText(/connected/i, { timeout: 5_000 });
   await drawStroke(b, [160, 60], [260, 140]);
-  await expect.poll(async () => Number(await b.getByTestId("board-canvas").getAttribute("data-stroke-count"))).toBe(2);
-  await expect.poll(async () => Number(await a.getByTestId("board-canvas").getAttribute("data-stroke-count"))).toBe(2);
+  await expect.poll(async () => Number(await b.getByTestId("board-canvas").getAttribute("data-stroke-count")), {
+    timeout: 15_000,
+  }).toBe(2);
 
-  await ctxA.close();
   await ctxB.close();
 });

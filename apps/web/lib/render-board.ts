@@ -265,6 +265,8 @@ export function renderBoardOverlay(ctx: CanvasRenderingContext2D, opts: RenderBo
     }
   }
   if (opts.comments?.length) {
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillStyle = opts.darkMode ? "#f8fafc" : "#0f172a";
     for (const c of opts.comments) {
       if (!c.pinned) continue;
       ctx.fillStyle = opts.darkMode ? "#1e293b" : "#ffffff";
@@ -278,6 +280,11 @@ export function renderBoardOverlay(ctx: CanvasRenderingContext2D, opts: RenderBo
       ctx.font = `${10 / camera.zoom}px system-ui, sans-serif`;
       ctx.textAlign = "center";
       ctx.fillText("💬", c.x + w / 2, c.y + h / 2);
+      const label = c.text.length > 48 ? `${c.text.slice(0, 45)}…` : c.text;
+      ctx.textAlign = "left";
+      ctx.font = `${11 / camera.zoom}px system-ui, sans-serif`;
+      ctx.fillStyle = opts.darkMode ? "#e2e8f0" : "#334155";
+      ctx.fillText(label, c.x, c.y + h + 14 / camera.zoom);
     }
   }
 

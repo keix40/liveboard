@@ -3,6 +3,7 @@ import { YKEYS } from "@liveboard/shared";
 import { getAssets, readAsset } from "./assets";
 import { getNotes } from "./notes";
 import { getShapes } from "./shapes";
+import { ensurePage } from "./page-model";
 import { getStrokes, LOCAL_ORIGIN } from "./strokes";
 
 export interface PageSnapshot {
@@ -16,9 +17,9 @@ export function getPageSnapshots(doc: Y.Doc): Y.Map<unknown> {
   return doc.getMap(YKEYS.pageSnapshots);
 }
 
-export function capturePageSnapshot(doc: Y.Doc): PageSnapshot {
+export function capturePageSnapshot(doc: Y.Doc, pageId?: string): PageSnapshot {
   const assetLayouts: Record<string, unknown> = {};
-  getAssets(doc).forEach((m, id) => {
+  getAssets(doc, pageId).forEach((m, id) => {
     const a = readAsset(m);
     assetLayouts[id] = {
       id: a.id,
@@ -33,9 +34,9 @@ export function capturePageSnapshot(doc: Y.Doc): PageSnapshot {
     };
   });
   return {
-    strokes: getStrokes(doc).toJSON(),
-    shapes: getShapes(doc).toJSON(),
-    notes: getNotes(doc).toJSON(),
+    strokes: getStrokes(doc, pageId).toJSON(),
+    shapes: getShapes(doc, pageId).toJSON(),
+    notes: getNotes(doc, pageId).toJSON(),
     assets: assetLayouts,
   };
 }
@@ -111,12 +112,7 @@ export function switchPageLocal(doc: Y.Doc, toId: string): void {
 }
 
 export function ensureEmptyPageSnapshot(doc: Y.Doc, pageId: string): void {
-  const snaps = getPageSnapshots(doc);
-  if (snaps.has(pageId)) return;
-  snaps.set(
-    pageId,
-    JSON.stringify({ strokes: [], shapes: {}, notes: {}, assets: {} } satisfies PageSnapshot),
-  );
+  ensurePage(doc, pageId);
 }
 
 function loadPageContent(doc: Y.Doc, toId: string): void {

@@ -1,5 +1,6 @@
 import * as Y from "yjs";
-import { YKEYS, type Shape, type ShapeField, type ShapeKind } from "@liveboard/shared";
+import { type Shape, type ShapeField, type ShapeKind } from "@liveboard/shared";
+import { getPageContent } from "./page-model";
 import {
   arrowHeadLength,
   arrowShaftEnd,
@@ -11,8 +12,8 @@ import { LOCAL_ORIGIN } from "./strokes";
 
 export type YShape = Y.Map<unknown>;
 
-export function getShapes(doc: Y.Doc): Y.Map<YShape> {
-  return doc.getMap(YKEYS.shapes);
+export function getShapes(doc: Y.Doc, pageId?: string): Y.Map<YShape> {
+  return getPageContent(doc, pageId).shapes as Y.Map<YShape>;
 }
 
 export function readShape(m: YShape): Shape {
@@ -34,10 +35,10 @@ export function readShape(m: YShape): Shape {
   };
 }
 
-export function upsertShape(doc: Y.Doc, shape: Shape): YShape {
+export function upsertShape(doc: Y.Doc, shape: Shape, pageId?: string): YShape {
   let entry!: YShape;
   doc.transact(() => {
-    const map = getShapes(doc);
+    const map = getShapes(doc, pageId);
     const existing = map.get(shape.id);
     entry = existing instanceof Y.Map ? existing : new Y.Map();
     const fields: [ShapeField, unknown][] = [

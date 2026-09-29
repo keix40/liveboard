@@ -1,11 +1,20 @@
+import * as Y from "yjs";
 import { ROOM_MAX_SINGLE_UPDATE_BYTES, ROOM_MAX_STORED_BYTES } from "@liveboard/shared";
 
 export interface RoomStorageState {
-  /** Approximate persisted + applied update payload bytes for this room. */
+  /** Current merged Y.Doc size (encodeStateAsUpdate), rebased on load and after applies. */
   storedBytes: number;
 }
 
-/** O(1) checks only — no Yjs decode or doc clone. */
+export function measureDocBytes(doc: Y.Doc): number {
+  return Y.encodeStateAsUpdate(doc).byteLength;
+}
+
+export function rebaseRoomStorage(state: RoomStorageState, doc: Y.Doc): void {
+  state.storedBytes = measureDocBytes(doc);
+}
+
+/** O(1) checks — budget uses rebased doc size + incoming update upper bound. */
 export function incomingUpdateAllowed(
   state: RoomStorageState,
   updateByteLength: number,
@@ -17,8 +26,4 @@ export function incomingUpdateAllowed(
     return { ok: false, reason: "room_storage_cap" };
   }
   return { ok: true };
-}
-
-export function recordAppliedUpdate(state: RoomStorageState, updateByteLength: number): void {
-  state.storedBytes += updateByteLength;
 }

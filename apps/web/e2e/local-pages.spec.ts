@@ -37,8 +37,12 @@ test("page switches are local unless presenter mode", async ({ browser }) => {
   await b.getByTestId("page-add").click();
   await expect.poll(async () => Number(await a.getByTestId("board-canvas").getAttribute("data-stroke-count"))).toBe(1);
   await b.getByTestId("page-select").selectOption({ index: 1 });
-  await expect.poll(async () => Number(await b.getByTestId("board-canvas").getAttribute("data-stroke-count"))).toBe(0);
+  await drawStroke(b, [50, 50], [130, 110]);
+  await drawStroke(b, [140, 60], [220, 130]);
+  await expect.poll(async () => Number(await b.getByTestId("board-canvas").getAttribute("data-stroke-count"))).toBe(2);
   await expect.poll(async () => Number(await a.getByTestId("board-canvas").getAttribute("data-stroke-count"))).toBe(1);
+  await a.getByTestId("page-select").selectOption({ index: 1 });
+  await expect.poll(async () => Number(await a.getByTestId("board-canvas").getAttribute("data-stroke-count"))).toBe(2);
 
   await ctxA.close();
   await ctxB.close();

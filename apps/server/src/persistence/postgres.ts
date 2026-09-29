@@ -112,6 +112,17 @@ export class PostgresPersistence implements DocPersistence {
     }
   }
 
+  async roomHasContent(roomId: string): Promise<boolean> {
+    const res = await this.pool.query<{ has: boolean }>(
+      `SELECT (
+         EXISTS (SELECT 1 FROM liveboard_documents WHERE room_id = $1)
+         OR EXISTS (SELECT 1 FROM liveboard_updates WHERE room_id = $1)
+       ) AS has`,
+      [roomId],
+    );
+    return Boolean(res.rows[0]?.has);
+  }
+
   async close(): Promise<void> {
     await this.pool.end();
   }

@@ -30,7 +30,7 @@ describe("evaluateTokenAccess", () => {
 
   it("claimed room rejects stranger without edit cap", async () => {
     const room = "claimed";
-    await createRoomRecord(room, SECRET);
+    await createRoomRecord(room);
     const record = await getRoomRecord(room);
     const result = evaluateTokenAccess({
       record,
@@ -45,7 +45,7 @@ describe("evaluateTokenAccess", () => {
 
   it("claimed room accepts holder of edit cap", async () => {
     const room = "owned";
-    const { editCap } = (await createRoomRecord(room, SECRET)) as { editCap: string };
+    const { editCap } = (await createRoomRecord(room)) as { editCap: string };
     const record = await getRoomRecord(room);
     const result = evaluateTokenAccess({
       record,
@@ -60,7 +60,7 @@ describe("evaluateTokenAccess", () => {
 
   it("view link mints viewer only; view cap cannot escalate to edit on claimed room", async () => {
     const room = "view-only";
-    await createRoomRecord(room, SECRET);
+    await createRoomRecord(room);
     const record = await getRoomRecord(room);
     const viewCap = viewCapability(room, SECRET);
     const viewer = evaluateTokenAccess({
@@ -86,14 +86,14 @@ describe("evaluateTokenAccess", () => {
 
   it("claimed room stays protected even if client would claim legacyOpen", async () => {
     const room = "not-legacy";
-    await createRoomRecord(room, SECRET);
+    const { editCap } = (await createRoomRecord(room)) as { editCap: string };
     const record = await getRoomRecord(room);
     const result = evaluateTokenAccess({
       record,
       requestedRole: "editor",
       room,
       jwtSecret: SECRET,
-      editCap: editCapability(room, SECRET),
+      editCap,
       viewCap: "",
     });
     expect(result.ok).toBe(true);

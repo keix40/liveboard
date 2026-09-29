@@ -8,21 +8,22 @@ The liveboard sync server (`apps/server`) enforces collaboration rules **before*
 - After that, **sync step 2**, **sync updates**, and any other document writes are rejected with WebSocket close code **4403 (Forbidden)** and the client is disconnected.
 - Awareness updates are still allowed so viewers can show cursors if the client sends them.
 
-This is stricter than silently ignoring writes: viewers cannot mutate shared CRDT state at all.
+## Editors — storage budget only
 
-## Locked items (`meta.lockedIds`)
+Editors may send Yjs updates subject to:
 
-Editors may edit the board freely except for objects whose ids appear in `meta.lockedIds` (strokes, shapes, sticky notes, and imported assets).
+1. **Per-message size** — single update frames larger than `ROOM_MAX_SINGLE_UPDATE_BYTES` (512 KiB) are rejected.
+2. **Room storage budget** — before each update is applied, the server rebases an O(1) counter to `Y.encodeStateAsUpdate(doc).byteLength` and rejects the update if `storedBytes + update.byteLength` would exceed `ROOM_MAX_STORED_BYTES` (8 MiB).
 
-For each incoming Yjs update from an editor:
+Rejected updates are **not** applied. The offending client is closed with **4410 (Room storage cap)** or **1009 (Message too big)** and an `lb:<code>:<reason>` close reason. Other clients continue editing.
 
-1. Clone the current document state into a temporary `Y.Doc`.
-2. Apply the update on the clone.
-3. Compare JSON fingerprints of every locked id before vs after.
-4. If any locked entity changed or was deleted, reject the update and close the connection with **4403**.
+There is **no** server-side lock enforcement, shadow-document trial, or byte-search meta detection. `meta.lockedIds` is a **client-only** accident guard; see `docs/SHARING.md`.
 
-Lock toggles are stored in `meta`; changing `lockedIds` itself is allowed when the locked entities' content is unchanged in the same update batch.
+## Rate limits
 
-## Client-side mirrors
+- Per-connection message rate limiting (token bucket).
+- HTTP WebSocket upgrade rate limit per IP.
 
-The web app also checks `isLocked()` before moves, erases, and edits for responsiveness. **Server enforcement is authoritative** for multi-user security.
+## Access control
+
+Edit vs view is decided by `/api/token` from `liveboard_rooms` and capability secrets, not by the sync server. The sync server trusts only JWT `role` and `sub` minted by the web app.

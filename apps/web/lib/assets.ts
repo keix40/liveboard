@@ -1,6 +1,7 @@
 import * as Y from "yjs";
-import { ASSET_MAX_BYTES, ASSET_ROOM_MAX_BYTES, YKEYS } from "@liveboard/shared";
+import { ASSET_MAX_BYTES, ASSET_ROOM_MAX_BYTES } from "@liveboard/shared";
 import { bytesToBase64 } from "./base64";
+import { getPageContent } from "./page-model";
 import { LOCAL_ORIGIN } from "./strokes";
 
 export interface BoardAsset {
@@ -16,8 +17,8 @@ export interface BoardAsset {
   authorId: string;
 }
 
-export function getAssets(doc: Y.Doc): Y.Map<Y.Map<unknown>> {
-  return doc.getMap(YKEYS.assets);
+export function getAssets(doc: Y.Doc, pageId?: string): Y.Map<Y.Map<unknown>> {
+  return getPageContent(doc, pageId).assets;
 }
 
 function assetBytes(map: Y.Map<Y.Map<unknown>>): number {
@@ -80,12 +81,12 @@ export function hitAsset(asset: BoardAsset, wx: number, wy: number): boolean {
   return wx >= asset.x && wx <= asset.x + asset.w && wy >= asset.y && wy <= asset.y + asset.h;
 }
 
-export function upsertAsset(doc: Y.Doc, asset: BoardAsset): void {
+export function upsertAsset(doc: Y.Doc, asset: BoardAsset, pageId?: string): void {
   const payloadBytes = Math.ceil((asset.dataBase64.length * 3) / 4);
   if (payloadBytes > ASSET_MAX_BYTES) {
     throw new Error(`Asset exceeds ${ASSET_MAX_BYTES} bytes`);
   }
-  const map = getAssets(doc);
+  const map = getAssets(doc, pageId);
   const nextTotal = assetBytes(map) + payloadBytes;
   if (nextTotal > ASSET_ROOM_MAX_BYTES) {
     throw new Error(`Room asset budget exceeded (${ASSET_ROOM_MAX_BYTES} bytes)`);

@@ -1,6 +1,7 @@
 import * as Y from "yjs";
 import { getStroke } from "perfect-freehand";
-import { YKEYS, type Point, type StrokeField, type StrokeVariant } from "@liveboard/shared";
+import { type Point, type StrokeField, type StrokeVariant } from "@liveboard/shared";
+import { getPageContent } from "./page-model";
 
 /**
  * Freehand strokes live in doc.getArray("strokes") as Y.Map entries:
@@ -15,8 +16,8 @@ export const LOCAL_ORIGIN = Symbol("local");
 /** Discarded touch ink (not tracked by UndoManager). */
 export const PROVISIONAL_ORIGIN = Symbol("provisional");
 
-export function getStrokes(doc: Y.Doc): Y.Array<YStroke> {
-  return doc.getArray<YStroke>(YKEYS.strokes);
+export function getStrokes(doc: Y.Doc, pageId?: string): Y.Array<YStroke> {
+  return getPageContent(doc, pageId).strokes as Y.Array<YStroke>;
 }
 
 export function flatToPoints(flat: ArrayLike<number>): Point[] {
@@ -34,8 +35,10 @@ export function beginStroke(
     size: number;
     variant?: StrokeVariant;
     first: Point;
+    pageId?: string;
   },
 ): Y.Array<number> {
+  const pageId = opts.pageId;
   const points = new Y.Array<number>();
   const stroke = new Y.Map<unknown>();
   doc.transact(() => {
@@ -50,7 +53,7 @@ export function beginStroke(
     ];
     for (const [k, v] of fields) stroke.set(k, v);
     points.push(opts.first);
-    getStrokes(doc).push([stroke]);
+    getStrokes(doc, pageId).push([stroke]);
   }, LOCAL_ORIGIN);
   return points;
 }
@@ -107,8 +110,8 @@ export function hitStroke(points: Point[], x: number, y: number, radius: number)
 }
 
 /** Delete every stroke under the eraser. Returns the number of strokes removed. */
-export function eraseAt(doc: Y.Doc, x: number, y: number, radius: number): number {
-  const strokes = getStrokes(doc);
+export function eraseAt(doc: Y.Doc, x: number, y: number, radius: number, pageId?: string): number {
+  const strokes = getStrokes(doc, pageId);
   let removed = 0;
   doc.transact(() => {
     for (let i = strokes.length - 1; i >= 0; i--) {
@@ -123,8 +126,8 @@ export function eraseAt(doc: Y.Doc, x: number, y: number, radius: number): numbe
 }
 
 /** Remove the stroke whose `points` array matches (e.g. cancelled touch-down before pan). */
-export function discardProvisionalStroke(doc: Y.Doc, points: Y.Array<number>): void {
-  const strokes = getStrokes(doc);
+export function discardProvisionalStroke(doc: Y.Doc, points: Y.Array<number>, pageId?: string): void {
+  const strokes = getStrokes(doc, pageId);
   doc.transact(() => {
     for (let i = strokes.length - 1; i >= 0; i--) {
       const s = strokes.get(i)!;
@@ -136,8 +139,8 @@ export function discardProvisionalStroke(doc: Y.Doc, points: Y.Array<number>): v
   }, PROVISIONAL_ORIGIN);
 }
 
-export function deleteStrokeById(doc: Y.Doc, id: string): void {
-  const strokes = getStrokes(doc);
+export function deleteStrokeById(doc: Y.Doc, id: string, pageId?: string): void {
+  const strokes = getStrokes(doc, pageId);
   doc.transact(() => {
     for (let i = strokes.length - 1; i >= 0; i--) {
       if (readStroke(strokes.get(i)!).id === id) strokes.delete(i, 1);

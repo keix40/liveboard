@@ -41,6 +41,9 @@ interface Props {
   hasSelection: boolean;
   activePageId: string;
   onSwitchPage(nextId: string, fromId: string): void;
+  shareLinks?: { editLink: string; viewLink: string } | null;
+  editAccessBanner?: string | null;
+  comments?: { id: string; text: string; x: number; y: number }[];
 }
 
 export function BoardSidePanel(p: Props) {
@@ -70,9 +73,7 @@ export function BoardSidePanel(p: Props) {
     const order = [...p.meta.pageOrder, id];
     p.doc.transact(() => ensureEmptyPageSnapshot(p.doc, id), LOCAL_ORIGIN);
     patchMeta({ pageOrder: order });
-    if (p.isPresenter) {
-      p.onSwitchPage(id, p.activePageId);
-    }
+    p.onSwitchPage(id, p.activePageId);
   };
 
   const importImage = async (file: File) => {
@@ -120,6 +121,29 @@ export function BoardSidePanel(p: Props) {
       className={`board-side-panel${p.className ? ` ${p.className}` : ""}`}
       data-testid="board-side-panel"
     >
+      {p.editAccessBanner ? (
+        <p className="side-banner" data-testid="edit-access-banner">
+          {p.editAccessBanner}
+        </p>
+      ) : null}
+      {p.shareLinks ? (
+        <div className="side-row share-links" data-testid="share-links">
+          <button
+            type="button"
+            data-testid="copy-edit-link"
+            onClick={() => void navigator.clipboard.writeText(p.shareLinks!.editLink)}
+          >
+            Copy can edit
+          </button>
+          <button
+            type="button"
+            data-testid="copy-view-link"
+            onClick={() => void navigator.clipboard.writeText(p.shareLinks!.viewLink)}
+          >
+            Copy view only
+          </button>
+        </div>
+      ) : null}
       <div className="side-row">
         <label>
           Stabilizer
@@ -380,6 +404,18 @@ export function BoardSidePanel(p: Props) {
           💬
         </button>
       </div>
+      {p.comments && p.comments.length > 0 ? (
+        <ul className="comment-list" data-testid="comment-list">
+          {p.comments.map((c) => (
+            <li key={c.id}>
+              <strong>{c.text.slice(0, 80)}</strong>
+              <span className="comment-coords">
+                ({Math.round(c.x)}, {Math.round(c.y)})
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <div className="side-row">
         <span className="role-pill" data-testid="room-role">
           {p.roomRole}

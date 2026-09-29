@@ -42,6 +42,23 @@ function lineScore(points: Point[]): number {
   return Math.max(0, 1 - avg / Math.max(8, len * 0.08));
 }
 
+function circleScore(points: Point[]): number {
+  const b = bounds(points);
+  if (b.w < 16 || b.h < 16) return 0;
+  const cx = (b.minX + b.maxX) / 2;
+  const cy = (b.minY + b.maxY) / 2;
+  const rx = b.w / 2;
+  const ry = b.h / 2;
+  let err = 0;
+  for (const [x, y] of points) {
+    const nx = (x - cx) / Math.max(1, rx);
+    const ny = (y - cy) / Math.max(1, ry);
+    err += Math.abs(nx * nx + ny * ny - 1);
+  }
+  const avg = err / points.length;
+  return Math.max(0, 1 - avg * 2);
+}
+
 function rectScore(points: Point[]): number {
   const b = bounds(points);
   if (b.w < 16 || b.h < 16) return 0;
@@ -63,6 +80,7 @@ export function recognizeStrokeShape(points: Point[]): RecognizedShape | null {
   const b = bounds(points);
   const line = lineScore(points);
   const rect = rectScore(points);
+  const circle = circleScore(points);
   const closed = Math.hypot(points[0]![0] - points.at(-1)![0], points[0]![1] - points.at(-1)![1]) < Math.max(20, Math.min(b.w, b.h) * 0.25);
   const aspect = b.w / Math.max(1, b.h);
 
@@ -77,8 +95,18 @@ export function recognizeStrokeShape(points: Point[]): RecognizedShape | null {
       confidence: line,
     };
   }
+  if (closed && circle > 0.72 && circle >= rect) {
+    return {
+      kind: "ellipse",
+      x: b.minX,
+      y: b.minY,
+      w: b.w,
+      h: b.h,
+      confidence: circle,
+    };
+  }
   if (rect > 0.55 && closed) {
-    const kind: ShapeKind = Math.abs(aspect - 1) < 0.35 ? "ellipse" : "rect";
+    const kind: ShapeKind = "rect";
     return {
       kind,
       x: b.minX,

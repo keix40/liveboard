@@ -19,5 +19,7 @@ export interface DocPersistence {
    * when several server instances write to the same room.
    */
   compact(roomId: string): Promise<void>;
+  /** True if snapshot or update log exists for this room. */
+  roomHasContent(roomId: string): Promise<boolean>;
   close(): Promise<void>;
 }

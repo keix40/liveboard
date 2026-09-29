@@ -19,6 +19,7 @@ export function useRoom(
     editCap?: string;
     viewCap?: string;
     onPasswordRequired?: () => void;
+    onEditAccessDenied?: (message: string) => void;
   },
 ) {
   const [conn, setConn] = useState<RoomConnection | null>(null);
@@ -40,6 +41,7 @@ export function useRoom(
       onStatus: setStatus,
       onRole: setRoomRole,
       onPasswordRequired: opts?.onPasswordRequired,
+      onEditAccessDenied: opts?.onEditAccessDenied,
       onTokenUserId: (userId) => {
         setIdentity({ ...me, id: userId });
       },
@@ -60,7 +62,15 @@ export function useRoom(
       c.destroy();
       setConn(null);
     };
-  }, [roomId, opts?.role, opts?.boardPassword, opts?.editCap, opts?.viewCap, opts?.onPasswordRequired]);
+  }, [
+    roomId,
+    opts?.role,
+    opts?.boardPassword,
+    opts?.editCap,
+    opts?.viewCap,
+    opts?.onPasswordRequired,
+    opts?.onEditAccessDenied,
+  ]);
 
   return { conn, identity, status, peers, roomRole, setRoomRole };
 }
