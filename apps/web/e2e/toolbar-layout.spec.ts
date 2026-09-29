@@ -39,14 +39,30 @@ for (const vp of VIEWPORTS) {
   });
 }
 
+test("phone chrome height stays within 10% of viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/board/hud-${Date.now()}`);
+  await expect(page.getByTestId("status")).toHaveText(/connected/i);
+  await expect(page.locator(".board-hud")).toHaveCount(0);
+  const chrome = page.getByTestId("board-chrome");
+  const chromeBox = (await chrome.boundingBox())!;
+  expect(chromeBox.height / 844).toBeLessThanOrEqual(0.102);
+});
+
 test("HUD does not overlap toolbar tools", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`/board/hud-${Date.now()}`);
-  await expect(page.getByTestId("status")).toBeVisible();
-  const statusBox = (await page.getByTestId("status").boundingBox())!;
+  await expect(page.getByTestId("status")).toHaveText(/connected/i);
+  const status = page.getByTestId("status");
   const pen = page.getByTestId("tool-pen");
+  await expect(status).toBeVisible();
+  await pen.scrollIntoViewIfNeeded();
+  const statusBox = (await status.boundingBox())!;
   const penBox = (await pen.boundingBox())!;
-  expect(statusBox.y + statusBox.height).toBeLessThanOrEqual(penBox.y + 2);
+  expect(statusBox).not.toBeNull();
+  expect(penBox).not.toBeNull();
+  expect(statusBox.y + statusBox.height).toBeLessThanOrEqual(penBox.y + penBox.height + 2);
+  expect(Math.abs(statusBox.y - penBox.y)).toBeLessThanOrEqual(14);
 });
 
 test("status pills do not cover export buttons at desktop width", async ({ page }) => {

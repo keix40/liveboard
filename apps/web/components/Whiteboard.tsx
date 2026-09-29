@@ -7,6 +7,7 @@ import { useRoom } from "@/lib/useRoom";
 import {
   beginStroke,
   deleteStrokeById,
+  discardProvisionalStroke,
   getStrokes,
   LOCAL_ORIGIN,
   readStroke,
@@ -33,12 +34,11 @@ import {
 import { renderBoardBase, renderBoardOverlay } from "@/lib/render-board";
 import { BoardCompositor } from "@/lib/board-compositor";
 import {
+  eventsAreLocal,
   isStrokePointsOnlyUpdate,
-  strokeIndicesFromPointEvents,
-  strokeIndicesTouched,
 } from "@/lib/yjs-events";
 import { getShapes, upsertShape, deleteShape } from "@/lib/shapes";
-import { createNote, deleteNote, getNotes } from "@/lib/notes";
+import { createNote, deleteNote, getNotes, type YNote } from "@/lib/notes";
 import { lassoSelect, pickAt, type SelectableRef } from "@/lib/selection";
 import { computeContentBounds } from "@/lib/board-bounds";
 import { exportBoardPdf, exportBoardPng } from "@/lib/export-board";
@@ -55,6 +55,9 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 const SHAPE_TOOLS = new Set<DrawTool>(["rect", "ellipse", "line", "arrow"]);
+const TOUCH_STROKE_DELAY_MS = 80;
+const TOUCH_STROKE_MOVE_PX = 4;
+
 function isPanGesture(tool: DrawTool, pointerType: string, touchCount: number): boolean {
   if (tool === "pan") return true;
   if (pointerType === "touch" && touchCount >= 2) return true;
@@ -66,7 +69,7 @@ export function Whiteboard({ roomId }: { roomId: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const canvasInstanceId = useRef(`canvas-${crypto.randomUUID()}`);
   const compositorRef = useRef<BoardCompositor | null>(null);
-  const liveStrokeIndicesRef = useRef<number[]>([]);
+  const localLiveStrokeIndexRef = useRef<number | null>(null);
   const drawing = useRef<Y.Array<number> | null>(null);
   const pointBatcher = useRef<StrokePointBatcher | null>(null);
   const rafRef = useRef(0);
@@ -76,7 +79,15 @@ export function Whiteboard({ roomId }: { roomId: string }) {
   const gesturePointerIdRef = useRef<number | null>(null);
   const chromeRef = useRef<HTMLElement>(null);
   const pointersRef = useRef(new Map<number, { x: number; y: number; type: string }>());
-  const pinchRef = useRef<{ distance: number; zoom: number } | null>(null);
+  const pinchRef = useRef<{ distance: number; zoom: number; midX: number; midY: number } | null>(null);
+  const touchStrokePendingRef = useRef<{
+    pointerId: number;
+    startSx: number;
+    startSy: number;
+    startWorld: { x: number; y: number };
+    pressure: number;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
   const panRef = useRef<{ lastX: number; lastY: number } | null>(null);
   const shapeStartRef = useRef<{ x: number; y: number } | null>(null);
   const lassoRef = useRef<{ x: number; y: number }[]>([]);
@@ -91,6 +102,7 @@ export function Whiteboard({ roomId }: { roomId: string }) {
   const [lassoPath, setLassoPath] = useState<{ x: number; y: number }[]>([]);
   const [chromeHeight, setChromeHeight] = useState(120);
   const [compactToolbar, setCompactToolbar] = useState(false);
+  const [notesRevision, setNotesRevision] = useState(0);
   const [previewShape, setPreviewShape] = useState<{
     kind: string;
     x: number;
@@ -128,7 +140,7 @@ export function Whiteboard({ roomId }: { roomId: string }) {
     return () => ro.disconnect();
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const mq = window.matchMedia("(max-width: 820px)");
     const apply = () => setCompactToolbar(mq.matches);
     apply();
@@ -172,8 +184,10 @@ export function Whiteboard({ roomId }: { roomId: string }) {
       selection,
       lassoPath,
       previewShape: previewShape ?? undefined,
-      liveStrokeIndices: liveStrokeIndicesRef.current,
-      excludeStrokeIndicesFromBase: liveStrokeIndicesRef.current,
+      liveStrokeIndices:
+        localLiveStrokeIndexRef.current != null ? [localLiveStrokeIndexRef.current] : undefined,
+      excludeStrokeIndicesFromBase:
+        localLiveStrokeIndexRef.current != null ? [localLiveStrokeIndexRef.current] : undefined,
     };
   }, [camera, strokes, collectShapes, collectNotes, selection, lassoPath, previewShape]);
 
@@ -207,30 +221,36 @@ export function Whiteboard({ roomId }: { roomId: string }) {
   useEffect(() => {
     if (!strokes || !shapesMap || !notesMap) return;
     const onStrokesDeep = (events: Y.YEvent<any>[]) => {
-      if (isStrokePointsOnlyUpdate(events)) {
-        liveStrokeIndicesRef.current = strokeIndicesFromPointEvents(events);
+      if (
+        isStrokePointsOnlyUpdate(events) &&
+        eventsAreLocal(events) &&
+        localLiveStrokeIndexRef.current != null
+      ) {
         scheduleFrame(false);
       } else {
-        liveStrokeIndicesRef.current = strokeIndicesTouched(events);
         scheduleFrame(true);
       }
     };
     const onStrokesShallow = () => setStrokeCount(strokes.length);
-    const onStructure = () => {
-      liveStrokeIndicesRef.current = [];
-      scheduleFrame(true);
+    const onStructure = () => scheduleFrame(true);
+    const onNotesMap = (event: Y.YMapEvent<YNote>) => {
+      if (event.changes.keys.size > 0) {
+        setNotesRevision((n) => n + 1);
+        scheduleFrame(true);
+      }
     };
     strokes.observeDeep(onStrokesDeep);
     strokes.observe(onStrokesShallow);
     shapesMap.observe(onStructure);
-    notesMap.observeDeep(onStructure);
+    notesMap.observe(onNotesMap);
     setStrokeCount(strokes.length);
+    setNotesRevision((n) => n + 1);
     scheduleFrame(true);
     return () => {
       strokes.unobserveDeep(onStrokesDeep);
       strokes.unobserve(onStrokesShallow);
       shapesMap.unobserve(onStructure);
-      notesMap.unobserveDeep(onStructure);
+      notesMap.unobserve(onNotesMap);
     };
   }, [strokes, shapesMap, notesMap, scheduleFrame]);
 
@@ -271,6 +291,48 @@ export function Whiteboard({ roomId }: { roomId: string }) {
 
   const nextZ = () => Date.now();
 
+  const clearTouchStrokePending = useCallback(() => {
+    const pending = touchStrokePendingRef.current;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    touchStrokePendingRef.current = null;
+  }, []);
+
+  const abandonProvisionalInk = useCallback(() => {
+    clearTouchStrokePending();
+    if (!doc || !drawing.current) return;
+    discardProvisionalStroke(doc, drawing.current);
+    pointBatcher.current?.dispose();
+    pointBatcher.current = null;
+    drawing.current = null;
+    strokePointerIdRef.current = null;
+    localLiveStrokeIndexRef.current = null;
+    scheduleFrame(true);
+  }, [clearTouchStrokePending, doc, scheduleFrame]);
+
+  const startPenStroke = useCallback(
+    (pointerId: number, world: { x: number; y: number }, pressure: number) => {
+      if (!doc || !identity) return;
+      clearTouchStrokePending();
+      beginAction();
+      const points = beginStroke(doc, {
+        id: crypto.randomUUID(),
+        authorId: identity.id,
+        color,
+        size,
+        variant: tool === "highlighter" ? "highlighter" : "pen",
+        first: [world.x, world.y, pressure || 0.5],
+      });
+      drawing.current = points;
+      strokePointerIdRef.current = pointerId;
+      localLiveStrokeIndexRef.current = getStrokes(doc).length - 1;
+      pointBatcher.current?.dispose();
+      pointBatcher.current = new StrokePointBatcher(doc, points);
+      scheduleFrame(true);
+    },
+    [beginAction, clearTouchStrokePending, color, doc, identity, scheduleFrame, size, tool],
+  );
+
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!doc || !identity || status === "unauthorized" || status === "connect-failed") return;
     if (e.button !== 0 && e.pointerType === "mouse") return;
@@ -291,9 +353,10 @@ export function Whiteboard({ roomId }: { roomId: string }) {
     const touchCount = touchPointers.length;
 
     if (touchCount >= 2 && !session.penDown) {
+      abandonProvisionalInk();
       const touches = touchPointers.map(([, p]) => p);
       const m = pinchMetrics(touches[0]!, touches[1]!);
-      pinchRef.current = { distance: m.distance, zoom: camera.zoom };
+      pinchRef.current = { distance: m.distance, zoom: camera.zoom, midX: m.midX, midY: m.midY };
       panRef.current = null;
       return;
     }
@@ -385,21 +448,25 @@ export function Whiteboard({ roomId }: { roomId: string }) {
     }
 
     if (tool === "pen" || tool === "highlighter") {
-      beginAction();
-      const points = beginStroke(doc, {
-        id: crypto.randomUUID(),
-        authorId: identity.id,
-        color,
-        size,
-        variant: tool === "highlighter" ? "highlighter" : "pen",
-        first: [world.x, world.y, e.pressure || 0.5],
-      });
-      drawing.current = points;
-      strokePointerIdRef.current = e.pointerId;
-      liveStrokeIndicesRef.current = [getStrokes(doc).length - 1];
-      pointBatcher.current?.dispose();
-      pointBatcher.current = new StrokePointBatcher(doc, points);
-      scheduleFrame(true);
+      if (e.pointerType === "touch") {
+        clearTouchStrokePending();
+        const timer = setTimeout(() => {
+          if (touchStrokePendingRef.current?.pointerId !== e.pointerId) return;
+          startPenStroke(e.pointerId, touchStrokePendingRef.current.startWorld, touchStrokePendingRef.current.pressure);
+        }, TOUCH_STROKE_DELAY_MS);
+        touchStrokePendingRef.current = {
+          pointerId: e.pointerId,
+          startSx: sx,
+          startSy: sy,
+          startWorld: world,
+          pressure: e.pressure || 0.5,
+          timer,
+        };
+        canvas.setPointerCapture(e.pointerId);
+        gesturePointerIdRef.current = e.pointerId;
+        return;
+      }
+      startPenStroke(e.pointerId, world, e.pressure || 0.5);
     }
   };
 
@@ -424,7 +491,10 @@ export function Whiteboard({ roomId }: { roomId: string }) {
       const touches = touchPointers.map(([, p]) => p);
       const m = pinchMetrics(touches[0]!, touches[1]!);
       const scale = m.distance / pinchRef.current.distance;
-      setCamera((cam) => zoomAt(cam, pinchRef.current!.zoom * scale, m.midX, m.midY));
+      const dx = m.midX - pinchRef.current.midX;
+      const dy = m.midY - pinchRef.current.midY;
+      pinchRef.current = { ...pinchRef.current, midX: m.midX, midY: m.midY };
+      setCamera((cam) => panBy(zoomAt(cam, pinchRef.current!.zoom * scale, m.midX, m.midY), dx, dy));
       return;
     }
 
@@ -464,6 +534,15 @@ export function Whiteboard({ roomId }: { roomId: string }) {
         h: Math.abs(world.y - y0),
       });
       return;
+    }
+
+    const pending = touchStrokePendingRef.current;
+    if (pending && e.pointerId === pending.pointerId && !drawing.current) {
+      const dx = sx - pending.startSx;
+      const dy = sy - pending.startSy;
+      if (Math.hypot(dx, dy) >= TOUCH_STROKE_MOVE_PX) {
+        startPenStroke(pending.pointerId, pending.startWorld, pending.pressure);
+      }
     }
 
     if (e.pointerId !== strokePointerIdRef.current) return;
@@ -533,13 +612,17 @@ export function Whiteboard({ roomId }: { roomId: string }) {
       }
     }
 
+    if (pointerId === touchStrokePendingRef.current?.pointerId) {
+      clearTouchStrokePending();
+    }
+
     if (wasStroke) {
       pointBatcher.current?.flush();
       pointBatcher.current?.dispose();
       pointBatcher.current = null;
       drawing.current = null;
       strokePointerIdRef.current = null;
-      liveStrokeIndicesRef.current = [];
+      localLiveStrokeIndexRef.current = null;
       scheduleFrame(true);
     }
   };
@@ -639,30 +722,48 @@ export function Whiteboard({ roomId }: { roomId: string }) {
   return (
     <div className="board">
       <header className="board-chrome" ref={chromeRef} data-testid="board-chrome">
-        <div className="board-hud hud">
-          <span className={`pill status-${status}`} data-testid="status">
-            {STATUS_LABEL[status] ?? status}
-          </span>
-          <span className="pill" data-testid="presence">
-            {everyone.length} online
-          </span>
-          <div className="avatars">
-            {everyone.slice(0, 6).map((p) => (
-              <span key={p.clientId} className="avatar" style={{ background: p.user.color }} title={p.user.name}>
-                {p.user.name.slice(0, 1)}
-              </span>
-            ))}
+        {!compactToolbar ? (
+          <div className="board-hud hud">
+            <span className={`pill status-${status}`} data-testid="status">
+              {STATUS_LABEL[status] ?? status}
+            </span>
+            <span className="pill" data-testid="presence">
+              {everyone.length} online
+            </span>
+            <div className="avatars">
+              {everyone.slice(0, 6).map((p) => (
+                <span key={p.clientId} className="avatar" style={{ background: p.user.color }} title={p.user.name}>
+                  {p.user.name.slice(0, 1)}
+                </span>
+              ))}
+            </div>
+            <button type="button" className="pill" data-testid="copy-link" onClick={() => void navigator.clipboard.writeText(window.location.href)}>
+              🔗 Copy link
+            </button>
           </div>
-          <button type="button" className="pill" data-testid="copy-link" onClick={() => void navigator.clipboard.writeText(window.location.href)}>
-            🔗 Copy link
-          </button>
-        </div>
+        ) : null}
         <Toolbar
           tool={tool}
           color={color}
           size={size}
           zoom={camera.zoom}
           compact={compactToolbar}
+          statusChip={
+            compactToolbar ? (
+              <>
+                <span
+                  className={`status-chip status-${status}`}
+                  data-testid="status"
+                  title={STATUS_LABEL[status] ?? status}
+                >
+                  <span className="sr-only">{STATUS_LABEL[status] ?? status}</span>
+                </span>
+                <span className="presence-chip" data-testid="presence" title={`${everyone.length} online`}>
+                  {everyone.length}
+                </span>
+              </>
+            ) : undefined
+          }
           onTool={setTool}
           onColor={setColor}
           onSize={setSize}
@@ -697,6 +798,7 @@ export function Whiteboard({ roomId }: { roomId: string }) {
           data-testid="board-canvas"
           data-canvas-id={canvasInstanceId.current}
           data-stroke-count={strokeCount}
+          data-camera={`${camera.x},${camera.y},${camera.zoom}`}
           style={{ cursor: cursorStyle, touchAction: "none" }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
@@ -708,6 +810,7 @@ export function Whiteboard({ roomId }: { roomId: string }) {
           <NoteLayer
             doc={doc}
             camera={camera}
+            notesRevision={notesRevision}
             notes={collectNotes()}
             selectedIds={new Set(selection.filter((s) => s.kind === "note").map((s) => s.id))}
             onSelect={(id) => setSelection([{ kind: "note", id }])}

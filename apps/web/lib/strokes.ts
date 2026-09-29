@@ -12,6 +12,9 @@ export type YStroke = Y.Map<unknown>;
 /** Transaction origin for local edits (tracked by the UndoManager, ignored for remote). */
 export const LOCAL_ORIGIN = Symbol("local");
 
+/** Discarded touch ink (not tracked by UndoManager). */
+export const PROVISIONAL_ORIGIN = Symbol("provisional");
+
 export function getStrokes(doc: Y.Doc): Y.Array<YStroke> {
   return doc.getArray<YStroke>(YKEYS.strokes);
 }
@@ -117,6 +120,20 @@ export function eraseAt(doc: Y.Doc, x: number, y: number, radius: number): numbe
     }
   }, LOCAL_ORIGIN);
   return removed;
+}
+
+/** Remove the stroke whose `points` array matches (e.g. cancelled touch-down before pan). */
+export function discardProvisionalStroke(doc: Y.Doc, points: Y.Array<number>): void {
+  const strokes = getStrokes(doc);
+  doc.transact(() => {
+    for (let i = strokes.length - 1; i >= 0; i--) {
+      const s = strokes.get(i)!;
+      if (s.get("points") === points) {
+        strokes.delete(i, 1);
+        break;
+      }
+    }
+  }, PROVISIONAL_ORIGIN);
 }
 
 export function deleteStrokeById(doc: Y.Doc, id: string): void {
