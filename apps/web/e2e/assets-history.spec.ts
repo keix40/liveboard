@@ -16,7 +16,10 @@ test("imported image renders, syncs, and appears in export bounds", async ({ bro
 
   await a.getByTestId("import-image").setInputFiles(pngPath);
   await expect(a.getByTestId("board-canvas")).toHaveAttribute("data-asset-count", "1", { timeout: 15_000 });
-  await expect(b.getByTestId("board-canvas")).toHaveAttribute("data-asset-count", "1", { timeout: 15_000 });
+  await expect(b.getByTestId("status")).toHaveText(/connected/i, { timeout: 15_000 });
+  await expect.poll(async () => await b.getByTestId("board-canvas").getAttribute("data-asset-count"), {
+    timeout: 20_000,
+  }).toBe("1");
 
   const inkA = await a.evaluate(() => {
     const c = document.querySelector('[data-testid="board-canvas"]') as HTMLCanvasElement;

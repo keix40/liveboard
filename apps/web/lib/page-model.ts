@@ -64,6 +64,7 @@ function attachPageContent(page: Y.Map<unknown>, content: PageContentMaps): void
 export function ensurePageModel(doc: Y.Doc): void {
   const pages = doc.getMap(YKEYS.pages);
   if (pages.size > 0) return;
+  if (!legacyHasContent(doc)) return;
 
   doc.transact(() => {
     const content = emptyPageContent();

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
-import { AUTO_SNAPSHOT_INTERVAL_MS, type Point, type RoomRole, type ShapeKind } from "@liveboard/shared";
+import { AUTO_SNAPSHOT_INTERVAL_MS, YKEYS, type Point, type RoomRole, type ShapeKind } from "@liveboard/shared";
 import { useRoom } from "@/lib/useRoom";
 import {
   beginStroke,
@@ -53,6 +53,7 @@ import { assetDataToBlobUrl } from "@/lib/asset-decode";
 import { cameraForFrame, frameBounds, frameFromViewport } from "@/lib/frames";
 import { isLocked, lockedEntitiesMutated, lockedEntityFingerprints, toggleLock } from "@/lib/locking";
 import { listHistorySnapshots, pushSnapshot, restoreHistorySnapshot } from "@/lib/snapshots";
+import { ensurePageModel } from "@/lib/page-model";
 import { restorePageSnapshot, type PageSnapshot } from "@/lib/pages";
 import { getComments, type PinnedComment } from "@/lib/comments";
 import { getReactions, type BoardReaction } from "@/lib/reactions";
@@ -188,19 +189,19 @@ export function Whiteboard({
   const activePageId = isPresenter ? (boardMeta?.activePageId ?? "page-1") : (localPageId ?? boardMeta?.activePageId ?? "page-1");
   const strokes = useMemo(
     () => (renderDoc ? getStrokes(renderDoc, contentPreview ? undefined : activePageId) : null),
-    [renderDoc, contentPreview, activePageId],
+    [renderDoc, contentPreview, activePageId, metaRevision],
   );
   const shapesMap = useMemo(
     () => (renderDoc ? getShapes(renderDoc, contentPreview ? undefined : activePageId) : null),
-    [renderDoc, contentPreview, activePageId],
+    [renderDoc, contentPreview, activePageId, metaRevision],
   );
   const notesMap = useMemo(
     () => (renderDoc ? getNotes(renderDoc, contentPreview ? undefined : activePageId) : null),
-    [renderDoc, contentPreview, activePageId],
+    [renderDoc, contentPreview, activePageId, metaRevision],
   );
   const assetsMap = useMemo(
     () => (renderDoc ? getAssets(renderDoc, contentPreview ? undefined : activePageId) : null),
-    [renderDoc, contentPreview, activePageId],
+    [renderDoc, contentPreview, activePageId, metaRevision],
   );
 
   const undo = useMemo(() => {
@@ -399,6 +400,25 @@ export function Whiteboard({
     },
     [paintFrame],
   );
+
+  useEffect(() => {
+    if (!doc || !conn) return;
+    const provider = conn.provider;
+    const onSynced = (synced: boolean) => {
+      if (!synced) return;
+      ensurePageModel(doc);
+      setMetaRevision((n) => n + 1);
+    };
+    provider.on("sync", onSynced);
+    if (provider.synced) onSynced(true);
+    const pagesMap = doc.getMap(YKEYS.pages);
+    const onPagesDeep = () => setMetaRevision((n) => n + 1);
+    pagesMap.observeDeep(onPagesDeep);
+    return () => {
+      provider.off("sync", onSynced);
+      pagesMap.unobserveDeep(onPagesDeep);
+    };
+  }, [doc, conn]);
 
   useEffect(() => {
     if (!strokes || !shapesMap || !notesMap || !assetsMap) return;

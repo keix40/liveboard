@@ -117,6 +117,7 @@ test("sticky notes appear on load and when added remotely to an idle peer", asyn
     clientX: boxA.x + 120,
     clientY: boxA.y + 140,
   });
+  await expect(a.locator(".sticky-note")).toHaveCount(1, { timeout: 15_000 });
 
   await b.goto(`/board/${room}`);
   await expect(b.getByTestId("status")).toHaveText(/connected/i);
@@ -152,6 +153,7 @@ test("remote Y.Text edits sync to a peer with the note focused", async ({ browse
     clientX: box.x + 100,
     clientY: box.y + 100,
   });
+  await expect(a.locator(".sticky-note")).toHaveCount(1, { timeout: 15_000 });
 
   await expect(b.locator(".sticky-note textarea")).toHaveCount(1, { timeout: 15_000 });
   const noteA = a.locator(".sticky-note textarea");
