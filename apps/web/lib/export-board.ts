@@ -11,13 +11,18 @@ export function downloadBlob(filename: string, blob: Blob): void {
   URL.revokeObjectURL(url);
 }
 
-export async function exportBoardPng(filename: string, bounds: Bounds, renderOpts: Omit<RenderBoardOpts, "camera" | "dpr">): Promise<void> {
+export type ExportRenderOpts = Omit<
+  RenderBoardOpts,
+  "camera" | "dpr" | "cssWidth" | "cssHeight" | "selection" | "lassoPath" | "previewShape"
+>;
+
+export async function exportBoardPng(filename: string, bounds: Bounds, renderOpts: ExportRenderOpts): Promise<void> {
   const canvas = renderBoardToExport(bounds, renderOpts);
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob((b) => resolve(b), "image/png"));
   if (blob) downloadBlob(filename, blob);
 }
 
-export async function exportBoardPdf(filename: string, bounds: Bounds, renderOpts: Omit<RenderBoardOpts, "camera" | "dpr">): Promise<void> {
+export async function exportBoardPdf(filename: string, bounds: Bounds, renderOpts: ExportRenderOpts): Promise<void> {
   const canvas = renderBoardToExport(bounds, renderOpts);
   const dataUrl = canvas.toDataURL("image/png");
   const w = canvas.width;

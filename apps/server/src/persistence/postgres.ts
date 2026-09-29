@@ -2,6 +2,7 @@ import pg from "pg";
 import type { DocPersistence } from "./types.js";
 import { foldUpdates } from "./merge.js";
 import type { Logger } from "../logger.js";
+import { postgresSslOption } from "./postgres-ssl.js";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS liveboard_documents (
@@ -34,8 +35,7 @@ export class PostgresPersistence implements DocPersistence {
     this.pool = new pg.Pool({
       connectionString,
       max: 10,
-      // Render's managed Postgres requires TLS on external connections; internal URLs work either way.
-      ssl: /sslmode=require|render\.com/.test(connectionString) ? { rejectUnauthorized: false } : undefined,
+      ssl: postgresSslOption(connectionString),
     });
     this.pool.on("error", (err) => this.log.error("pg pool error", { err: err.message }));
   }

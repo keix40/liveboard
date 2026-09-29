@@ -48,7 +48,7 @@ test("pen pointer events draw a stroke", async ({ page }) => {
 test("rectangle tool creates content", async ({ page }) => {
   const room = `rect-${Date.now()}`;
   await page.goto(`/board/${room}`);
-  await page.locator('button[title="rect"]').click();
+  await page.getByTestId("tool-rect").click();
   await drawStroke(page, [120, 120], [220, 200]);
   await expect(page.getByTestId("board-canvas")).toHaveAttribute("data-stroke-count", "0");
 });
@@ -57,6 +57,6 @@ test("zoom controls change label", async ({ page }) => {
   const room = `zoom-${Date.now()}`;
   await page.goto(`/board/${room}`);
   await expect(page.getByText("100%")).toBeVisible();
-  await page.locator('button[title="Zoom in"]').click();
+  await page.getByTestId("tool-zoom-in").click();
   await expect(page.getByText(/1\d\d%/)).toBeVisible();
 });

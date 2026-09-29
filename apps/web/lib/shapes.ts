@@ -28,13 +28,11 @@ export function readShape(m: YShape): Shape {
 }
 
 export function upsertShape(doc: Y.Doc, shape: Shape): YShape {
-  const map = getShapes(doc);
-  let entry = map.get(shape.id);
-  if (!(entry instanceof Y.Map)) {
-    entry = new Y.Map();
-    map.set(shape.id, entry);
-  }
+  let entry!: YShape;
   doc.transact(() => {
+    const map = getShapes(doc);
+    const existing = map.get(shape.id);
+    entry = existing instanceof Y.Map ? existing : new Y.Map();
     const fields: [ShapeField, unknown][] = [
       ["id", shape.id],
       ["kind", shape.kind],
@@ -51,9 +49,10 @@ export function upsertShape(doc: Y.Doc, shape: Shape): YShape {
       ["createdAt", shape.createdAt],
     ];
     if (shape.text !== undefined) fields.push(["text", shape.text]);
-    for (const [k, v] of fields) entry!.set(k, v);
+    for (const [k, v] of fields) entry.set(k, v);
+    map.set(shape.id, entry);
   }, LOCAL_ORIGIN);
-  return entry!;
+  return entry;
 }
 
 export function deleteShape(doc: Y.Doc, id: string): void {

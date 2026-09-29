@@ -114,6 +114,7 @@ export type Tool =
   | "pen"
   | "highlighter"
   | "eraser"
+  | "pan"
   | "rect"
   | "ellipse"
   | "line"

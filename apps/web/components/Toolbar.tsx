@@ -12,6 +12,7 @@ interface Props {
   color: string;
   size: number;
   zoom: number;
+  compact?: boolean;
   onTool(t: DrawTool): void;
   onColor(c: string): void;
   onSize(s: number): void;
@@ -30,6 +31,7 @@ const TOOLS: { id: DrawTool; label: string }[] = [
   { id: "pen", label: "✏️" },
   { id: "highlighter", label: "🖍" },
   { id: "eraser", label: "🧽" },
+  { id: "pan", label: "✋" },
   { id: "select", label: "⬚" },
   { id: "rect", label: "▭" },
   { id: "ellipse", label: "◯" },
@@ -41,12 +43,14 @@ const TOOLS: { id: DrawTool; label: string }[] = [
 
 export function Toolbar(p: Props) {
   return (
-    <div className="toolbar-wrap">
+    <div className={`toolbar-scroll${p.compact ? " compact" : ""}`} data-testid="toolbar-scroll">
       <div className="toolbar" role="toolbar" aria-label="Drawing tools">
         {TOOLS.map((t) => (
           <button
             key={t.id}
+            type="button"
             className="tool"
+            data-testid={`tool-${t.id}`}
             title={t.id}
             aria-pressed={p.tool === t.id}
             onClick={() => p.onTool(t.id)}
@@ -54,10 +58,11 @@ export function Toolbar(p: Props) {
             {t.label}
           </button>
         ))}
-        <span className="sep" />
+        <span className="sep" aria-hidden />
         <label className="color-picker-wrap" title="Custom color">
           <input
             type="color"
+            data-testid="tool-color-picker"
             value={p.color.startsWith("#") && p.color.length >= 7 ? p.color.slice(0, 7) : "#0f172a"}
             onChange={(e) => p.onColor(e.target.value)}
             aria-label="Pick color"
@@ -66,51 +71,79 @@ export function Toolbar(p: Props) {
         {COLORS.map((c) => (
           <button
             key={c}
+            type="button"
             className="swatch"
+            data-testid={`swatch-${c}`}
             style={{ background: c }}
             aria-label={`Color ${c}`}
             aria-pressed={p.color === c}
             onClick={() => p.onColor(c)}
           />
         ))}
-        <span className="sep" />
+        <span className="sep" aria-hidden />
         {SIZES.map((s) => (
-          <button key={s} className="tool size-btn" aria-pressed={p.size === s} onClick={() => p.onSize(s)}>
+          <button
+            key={s}
+            type="button"
+            className="tool size-btn"
+            data-testid={`size-${s}`}
+            aria-pressed={p.size === s}
+            onClick={() => p.onSize(s)}
+          >
             {s}
           </button>
         ))}
-        <span className="sep" />
-        <button className="tool" onClick={p.onUndo} title="Undo (Ctrl/Cmd+Z)">
+        <span className="sep" aria-hidden />
+        <button type="button" className="tool" data-testid="tool-undo" onClick={p.onUndo} title="Undo (Ctrl/Cmd+Z)">
           ↶
         </button>
-        <button className="tool" onClick={p.onRedo} title="Redo (Ctrl/Cmd+Shift+Z)">
+        <button type="button" className="tool" data-testid="tool-redo" onClick={p.onRedo} title="Redo (Ctrl/Cmd+Shift+Z)">
           ↷
         </button>
-        <button className="tool" onClick={p.onDeleteSelection} title="Delete selection">
+        <button type="button" className="tool" data-testid="tool-delete" onClick={p.onDeleteSelection} title="Delete selection">
           ⌫
         </button>
-        <button className="tool" onClick={p.onClear} title="Clear board">
+        <button type="button" className="tool" data-testid="tool-clear" onClick={p.onClear} title="Clear board">
           🗑
         </button>
-        <span className="sep" />
-        <button className="tool" onClick={p.onZoomOut} title="Zoom out">
+        <span className="sep" aria-hidden />
+        <button type="button" className="tool" data-testid="tool-zoom-out" onClick={p.onZoomOut} title="Zoom out">
           −
         </button>
-        <span className="zoom-label">{Math.round(p.zoom * 100)}%</span>
-        <button className="tool" onClick={p.onZoomIn} title="Zoom in">
+        <span className="zoom-label" data-testid="zoom-label">
+          {Math.round(p.zoom * 100)}%
+        </span>
+        <button type="button" className="tool" data-testid="tool-zoom-in" onClick={p.onZoomIn} title="Zoom in">
           +
         </button>
-        <button className="tool" onClick={p.onFit} title="Fit to screen">
+        <button type="button" className="tool" data-testid="tool-fit" onClick={p.onFit} title="Fit to screen">
           ⊡
         </button>
-        <span className="sep" />
-        <button className="tool" onClick={p.onExportPng} title="Export PNG">
+        <span className="sep" aria-hidden />
+        <button type="button" className="tool" data-testid="tool-export-png" onClick={p.onExportPng} title="Export PNG">
           PNG
         </button>
-        <button className="tool" onClick={p.onExportPdf} title="Export PDF">
+        <button type="button" className="tool" data-testid="tool-export-pdf" onClick={p.onExportPdf} title="Export PDF">
           PDF
         </button>
       </div>
     </div>
   );
 }
+
+/** All toolbar controls that must stay tappable (used by layout regression tests). */
+export const TOOLBAR_HIT_TEST_IDS = [
+  ...TOOLS.map((t) => `tool-${t.id}`),
+  "tool-color-picker",
+  ...COLORS.map((c) => `swatch-${c}`),
+  ...SIZES.map((s) => `size-${s}`),
+  "tool-undo",
+  "tool-redo",
+  "tool-delete",
+  "tool-clear",
+  "tool-zoom-out",
+  "tool-zoom-in",
+  "tool-fit",
+  "tool-export-png",
+  "tool-export-pdf",
+] as const;

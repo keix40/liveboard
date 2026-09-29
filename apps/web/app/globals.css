@@ -8,28 +8,107 @@ button { font: inherit; cursor: pointer; }
 .landing input { flex: 1; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font: inherit; }
 .btn { padding: 10px 16px; border: 0; border-radius: 8px; background: #0f172a; color: white; }
 .btn.secondary { background: white; color: #0f172a; border: 1px solid #cbd5e1; }
-.board { position: fixed; inset: 0; overflow: hidden; touch-action: none; }
-.board canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+
+.board {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  touch-action: none;
+  background: #f8fafc;
+}
+
+.board-chrome {
+  flex-shrink: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-rows: auto auto;
+  gap: 8px;
+  padding: 8px 10px 10px;
+  background: rgb(248 250 252 / 0.98);
+  border-bottom: 1px solid #e2e8f0;
+  backdrop-filter: blur(6px);
+  isolation: isolate;
+}
+
+.board-hud {
+  grid-row: 1;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  position: relative;
+  z-index: 2;
+}
+
+.toolbar-scroll {
+  grid-row: 2;
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+.board-surface {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.board-surface canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
 .note-layer { position: absolute; inset: 0; pointer-events: none; z-index: 4; overflow: hidden; }
 .sticky-note { position: absolute; top: 0; left: 0; pointer-events: auto; border: 1px solid #ca8a04; border-radius: 4px; box-shadow: 0 2px 8px rgb(15 23 42 / 0.12); }
 .sticky-note.selected { outline: 2px solid #2563eb; }
 .sticky-text { width: 100%; height: 100%; border: 0; resize: none; background: transparent; padding: 8px; font: inherit; box-sizing: border-box; }
-.toolbar-wrap { position: absolute; top: 12px; left: 12px; right: 12px; z-index: 10; display: flex; justify-content: center; pointer-events: none; }
-.toolbar { pointer-events: auto; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 8px; max-width: 100%; background: white; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 16px rgb(15 23 42 / 0.08); overflow-x: auto; }
+
+
+.toolbar-scroll.compact {
+  max-height: min(12vh, 76px);
+}
+
+.toolbar {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 8px;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgb(15 23 42 / 0.08);
+  min-width: min-content;
+}
+
+.toolbar-scroll.compact .toolbar {
+  flex-wrap: nowrap;
+}
+
 .toolbar .zoom-label { font-size: 12px; min-width: 44px; text-align: center; color: #475569; }
 .toolbar .size-btn { min-width: 28px; font-size: 12px; }
 .color-picker-wrap input { width: 28px; height: 28px; padding: 0; border: 0; background: none; cursor: pointer; }
-@media (max-width: 640px) {
-  .hud { flex-wrap: wrap; max-width: calc(100% - 24px); }
-  .toolbar { max-height: 40vh; }
-}
-.swatch { width: 24px; height: 24px; border-radius: 999px; border: 2px solid white; outline: 1px solid #cbd5e1; padding: 0; }
+
+.swatch { width: 24px; height: 24px; border-radius: 999px; border: 2px solid white; outline: 1px solid #cbd5e1; padding: 0; flex-shrink: 0; }
 .swatch[aria-pressed="true"] { outline: 2px solid #0f172a; }
-.toolbar .sep { width: 1px; height: 24px; background: #e2e8f0; margin: 0 4px; }
-.toolbar button.tool { padding: 4px 10px; border-radius: 8px; border: 1px solid transparent; background: transparent; }
+.toolbar .sep { width: 1px; height: 24px; background: #e2e8f0; margin: 0 2px; flex-shrink: 0; }
+.toolbar button.tool { padding: 4px 10px; border-radius: 8px; border: 1px solid transparent; background: transparent; flex-shrink: 0; }
 .toolbar button.tool:hover { background: #f1f5f9; }
-.hud { position: absolute; top: 12px; right: 12px; display: flex; gap: 8px; align-items: center; z-index: 10; font-size: 13px; }
-.pill { padding: 4px 10px; border-radius: 999px; background: white; border: 1px solid #e2e8f0; }
+
+.hud { /* children stay inside .board-hud — never flatten into toolbar row */ }
+.pill { padding: 4px 10px; border-radius: 999px; background: white; border: 1px solid #e2e8f0; white-space: nowrap; }
 .status-connected { color: #15803d; }
 .status-connecting { color: #b45309; }
 .status-disconnected { color: #b91c1c; }
