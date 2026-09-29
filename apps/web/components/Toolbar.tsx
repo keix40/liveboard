@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import type { Tool } from "@liveboard/shared";
 
 export type DrawTool = Tool;
@@ -13,6 +14,7 @@ interface Props {
   size: number;
   zoom: number;
   compact?: boolean;
+  statusChip?: ReactNode;
   onTool(t: DrawTool): void;
   onColor(c: string): void;
   onSize(s: number): void;
@@ -45,6 +47,12 @@ export function Toolbar(p: Props) {
   return (
     <div className={`toolbar-scroll${p.compact ? " compact" : ""}`} data-testid="toolbar-scroll">
       <div className="toolbar" role="toolbar" aria-label="Drawing tools">
+        {p.statusChip ? (
+          <>
+            <span className="toolbar-status">{p.statusChip}</span>
+            <span className="sep" aria-hidden />
+          </>
+        ) : null}
         {TOOLS.map((t) => (
           <button
             key={t.id}
