@@ -9,7 +9,8 @@ import { WindowCounter } from "./rate-limit.js";
 import { RoomManager } from "./room-manager.js";
 import { createPersistence, type DocPersistence } from "./persistence/index.js";
 import { createPubSub, type PubSub } from "./pubsub/index.js";
-import { scheduleAppClose } from "./ws-close.js";
+import { clientIp } from "./client-ip.js";
+import { forceCloseWebSocket } from "./ws-close.js";
 
 export interface SyncServer {
   http: http.Server;
@@ -32,12 +33,6 @@ function rejectHttp(socket: Duplex, status: number, message: string) {
     `HTTP/1.1 ${status} ${message}\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: ${Buffer.byteLength(message)}\r\n\r\n${message}`,
   );
   socket.destroy();
-}
-
-function clientIp(req: http.IncomingMessage): string {
-  const fwd = req.headers["x-forwarded-for"];
-  const first = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(",")[0]?.trim();
-  return first || req.socket.remoteAddress || "unknown";
 }
 
 export function createSyncServer(cfg: ServerConfig, opts: SyncServerOptions = {}): SyncServer {
@@ -90,18 +85,15 @@ export function createSyncServer(cfg: ServerConfig, opts: SyncServerOptions = {}
       return rejectHttp(socket, 403, "Origin Not Allowed");
     }
 
-    // Auth failures are reported with an app-level close code (4401/4403) *after* the
-    // upgrade, because browsers hide HTTP status codes of failed WebSocket handshakes.
-    // The client uses the code to fetch a fresh token before reconnecting.
+    // Reject auth at the HTTP layer when possible so clients learn immediately (browser
+    // WebSocket APIs still hide the status, but Node clients and our sync watchdog see failure).
     let user;
     try {
       user = await verifyRoomToken(url.searchParams.get("token"), roomId, cfg.jwtSecret);
     } catch (err) {
-      const code = err instanceof AuthError && err.kind === "forbidden" ? CloseCode.Forbidden : CloseCode.Unauthorized;
+      const forbidden = err instanceof AuthError && err.kind === "forbidden";
       log.info("auth rejected", { roomId, ip, reason: (err as Error).message });
-      return wss.handleUpgrade(req, socket, head, (ws) =>
-        scheduleAppClose(ws, code, err instanceof AuthError && err.kind === "forbidden" ? "forbidden" : "unauthorized"),
-      );
+      return rejectHttp(socket, forbidden ? 403 : 401, forbidden ? "Forbidden" : "Unauthorized");
     }
 
     let room;
@@ -112,12 +104,12 @@ export function createSyncServer(cfg: ServerConfig, opts: SyncServerOptions = {}
       return rejectHttp(socket, 500, "Room Unavailable");
     }
     if (room.size >= cfg.maxConnectionsPerRoom) {
-      return wss.handleUpgrade(req, socket, head, (ws) => scheduleAppClose(ws, CloseCode.RoomFull, "room full"));
+      return wss.handleUpgrade(req, socket, head, (ws) => forceCloseWebSocket(ws, CloseCode.RoomFull, "room full"));
     }
 
     wss.handleUpgrade(req, socket, head, (ws: Alive) => {
       // Lost a race with idle eviction: ask the client to retry (it reloads the room).
-      if (room.isDestroyed) return scheduleAppClose(ws, 1013, "try again");
+      if (room.isDestroyed) return forceCloseWebSocket(ws, 1013, "try again");
       ws.isAlive = true;
       ws.on("pong", () => (ws.isAlive = true));
       room.addClient(ws, user);

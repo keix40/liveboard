@@ -9,7 +9,7 @@ import type { DocPersistence } from "./persistence/index.js";
 import type { PubSub, RoomBroadcast } from "./pubsub/index.js";
 import type { Logger } from "./logger.js";
 import { PerTurnTokenBucket, TokenBucket } from "./rate-limit.js";
-import { scheduleAppClose } from "./ws-close.js";
+import { forceCloseWebSocket } from "./ws-close.js";
 import { encodeAwareness, encodeSyncStep1, encodeUpdate } from "./protocol.js";
 
 /** Transaction origins that must NOT be re-persisted / re-published. */
@@ -130,11 +130,11 @@ export class Room {
     awarenessProtocol.removeAwarenessStates(this.awareness, [...client.awarenessIds], null);
     if (this.clients.size === 0) this.deps.onEmpty(this);
     this.deps.log.warn("closing client", { roomId: this.id, user: client.user.sub, code, reason });
-    scheduleAppClose(client.ws, code, reason);
+    forceCloseWebSocket(client.ws, code, reason);
   }
 
   closeAll(code: number, reason: string): void {
-    for (const ws of this.clients.keys()) ws.close(code, reason);
+    for (const ws of this.clients.keys()) forceCloseWebSocket(ws, code, reason);
   }
 
   // ─── Incoming frames ────────────────────────────────────────────────────

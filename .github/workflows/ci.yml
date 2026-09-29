@@ -20,3 +20,10 @@ jobs:
       - run: pnpm build
         env:
           NEXT_PUBLIC_WS_URL: ws://localhost:1234
+      - run: pnpm exec playwright install chromium
+        working-directory: apps/web
+      - run: pnpm test:e2e
+        env:
+          LIVEBOARD_JWT_SECRET: test-secret-test-secret-test-secret-123
+          NEXT_PUBLIC_WS_URL: ws://localhost:1234
+          CI: "true"

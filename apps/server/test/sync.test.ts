@@ -7,7 +7,7 @@ import { createSyncServer, type SyncServer } from "../src/server.js";
 import { MemoryPersistence } from "../src/persistence/memory.js";
 import { signRoomToken } from "../src/auth.js";
 import { createLogger } from "../src/logger.js";
-import { CloseCode, formatAppCloseReason, MessageType, parseAppCloseCode } from "@liveboard/shared";
+import { CloseCode, MessageType, parseAppCloseCode } from "@liveboard/shared";
 import * as encoding from "lib0/encoding";
 
 const SECRET = "test-secret-test-secret-test-secret-123";
@@ -108,31 +108,44 @@ describe("sync server", () => {
     viewer.provider.destroy();
   });
 
-  it("rejects bad tokens with close code 4401 and wrong-room tokens with 4403", async () => {
-    const closeEvent = (room: string, tok: string) =>
-      new Promise<{ code: number; reason: string }>((resolve) => {
-        const ws = new WebSocket(`${url}/${room}?token=${tok}`);
-        ws.on("close", (code, reason) => resolve({ code, reason: reason.toString() }));
+  it("rejects bad tokens with HTTP 401 and wrong-room tokens with HTTP 403", async () => {
+    const httpStatus = (room: string, tok: string) =>
+      new Promise<number>((resolve) => {
+        const ws = new WebSocket(`${url}/${room}?token=${encodeURIComponent(tok)}`);
+        ws.on("unexpected-response", (_req, res) => resolve(res.statusCode ?? 0));
+        ws.on("close", () => resolve(0));
+        ws.on("error", () => {});
       });
-    const badSecret = await closeEvent("room-auth", await token("room-auth", "editor", "x".repeat(40)));
-    expect(badSecret.code).toBe(CloseCode.Unauthorized);
-    expect(parseAppCloseCode(badSecret.code, badSecret.reason)).toBe(CloseCode.Unauthorized);
-
-    const wrongRoom = await closeEvent("room-auth", await token("other-room"));
-    expect(wrongRoom.code).toBe(CloseCode.Forbidden);
-    expect(parseAppCloseCode(wrongRoom.code, wrongRoom.reason)).toBe(CloseCode.Forbidden);
-
-    expect((await closeEvent("room-auth", "")).code).toBe(CloseCode.Unauthorized);
+    expect(await httpStatus("room-auth", await token("room-auth", "editor", "x".repeat(40)))).toBe(401);
+    expect(await httpStatus("room-auth", await token("other-room"))).toBe(403);
+    expect(await httpStatus("room-auth", "")).toBe(401);
   });
 
-  it("embeds app close codes in the close reason for proxy-safe auth failures", async () => {
-    const wrongRoom = await new Promise<{ code: number; reason: string }>((resolve) => {
-      void token("other-room").then((tok) => {
-        const ws = new WebSocket(`${url}/room-proxy?token=${encodeURIComponent(tok)}`);
-        ws.on("close", (code, reason) => resolve({ code, reason: reason.toString() }));
+  it("embeds app close codes in WS kick reasons (room full)", async () => {
+    const cfg = loadConfig({
+      port: 0,
+      host: "127.0.0.1",
+      jwtSecret: SECRET,
+      persistence: "memory",
+      maxConnectionsPerRoom: 1,
+    });
+    const local = createSyncServer(cfg, { persistence: new MemoryPersistence(), log: createLogger("error") });
+    const port = await local.listen();
+    const localUrl = `ws://127.0.0.1:${port}`;
+    const room = "room-full-embed";
+    const tok = await token(room);
+    const a = new WebSocket(`${localUrl}/${room}?token=${encodeURIComponent(tok)}`);
+    await new Promise<void>((r) => a.on("open", () => r()));
+    const ev = await new Promise<{ code: number; reason: string }>((resolve) => {
+      void token(room).then((tok2) => {
+        const b = new WebSocket(`${localUrl}/${room}?token=${encodeURIComponent(tok2)}`);
+        b.on("close", (code, reason) => resolve({ code, reason: reason.toString() }));
       });
     });
-    expect(wrongRoom.reason.startsWith(formatAppCloseReason(CloseCode.Forbidden, "x").slice(0, 7))).toBe(true);
+    expect(ev.code).toBe(CloseCode.RoomFull);
+    expect(parseAppCloseCode(ev.code, ev.reason)).toBe(CloseCode.RoomFull);
+    a.close();
+    await local.close();
   });
 
   it("stops processing frames after a kick", async () => {

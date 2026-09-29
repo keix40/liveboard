@@ -7,7 +7,6 @@ import { useRoom } from "@/lib/useRoom";
 import {
   beginStroke,
   eraseAt,
-  extendStroke,
   getStrokes,
   LOCAL_ORIGIN,
   readStroke,
@@ -15,6 +14,7 @@ import {
 } from "@/lib/strokes";
 import { Cursors } from "./Cursors";
 import { Toolbar, type DrawTool } from "./Toolbar";
+import { StrokePointBatcher } from "@/lib/stroke-batcher";
 
 const STATUS_LABEL: Record<string, string> = {
   connected: "● Connected",
@@ -23,12 +23,14 @@ const STATUS_LABEL: Record<string, string> = {
   offline: "● Offline — changes saved locally",
   "room-full": "Room is full",
   unauthorized: "Access denied",
+  "connect-failed": "Couldn't connect — check link or try again",
 };
 
 export function Whiteboard({ roomId }: { roomId: string }) {
   const { conn, identity, status, peers } = useRoom(roomId);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef<Y.Array<number> | null>(null);
+  const pointBatcher = useRef<StrokePointBatcher | null>(null);
   const rafRef = useRef(0);
   const cursorRaf = useRef(0);
   const [tool, setTool] = useState<DrawTool>("pen");
@@ -109,7 +111,7 @@ export function Whiteboard({ roomId }: { roomId: string }) {
   };
 
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!doc || !identity || status === "unauthorized") return;
+    if (!doc || !identity || status === "unauthorized" || status === "connect-failed") return;
     e.currentTarget.setPointerCapture(e.pointerId);
     const p = toPoint(e);
     if (tool === "eraser") {
@@ -118,13 +120,16 @@ export function Whiteboard({ roomId }: { roomId: string }) {
       return;
     }
     undo?.stopCapturing(); // each stroke = one undo step
-    drawing.current = beginStroke(doc, {
+    const points = beginStroke(doc, {
       id: crypto.randomUUID(),
       authorId: identity.id,
       color,
       size,
       first: p,
     });
+    drawing.current = points;
+    pointBatcher.current?.dispose();
+    pointBatcher.current = new StrokePointBatcher(doc, points);
   };
 
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -132,10 +137,13 @@ export function Whiteboard({ roomId }: { roomId: string }) {
     setCursor({ x: p[0], y: p[1] });
     if (!doc || !drawing.current) return;
     if (tool === "eraser") eraseAt(doc, p[0], p[1], 10);
-    else extendStroke(doc, drawing.current, p);
+    else pointBatcher.current?.push(p);
   };
 
   const endStroke = () => {
+    pointBatcher.current?.flush();
+    pointBatcher.current?.dispose();
+    pointBatcher.current = null;
     drawing.current = null;
   };
 

@@ -14,11 +14,21 @@ export default defineConfig({
       command: "pnpm --filter @liveboard/server dev",
       url: "http://localhost:1234/healthz",
       reuseExistingServer: !process.env.CI,
+      env: {
+        LIVEBOARD_JWT_SECRET:
+          process.env.LIVEBOARD_JWT_SECRET ?? "test-secret-test-secret-test-secret-123",
+        PERSISTENCE: "memory",
+      },
     },
     {
       command: "pnpm --filter @liveboard/web dev",
       url: "http://localhost:3000",
       reuseExistingServer: !process.env.CI,
+      env: {
+        LIVEBOARD_JWT_SECRET:
+          process.env.LIVEBOARD_JWT_SECRET ?? "test-secret-test-secret-test-secret-123",
+        NEXT_PUBLIC_WS_URL: process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:1234",
+      },
     },
   ],
 });

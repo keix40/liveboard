@@ -204,10 +204,12 @@ Open the same room on :3000 and :3001. Each window talks to a different server, 
   - doc sync and awareness between two clients
   - persistence, compaction, and restore after room eviction
   - viewers can't write
-  - `4401`/`4403` auth close codes
+  - HTTP **401/403** on bad/mismatched JWT at upgrade; forceful TCP teardown on WS kicks
+  - FIN-blocking TCP proxy regression (simulates Render) in `apps/server/test/proxy-auth.test.ts`
   - HTTP 400 for invalid room ids
 - **`apps/web/lib/strokes.test.ts`** covers stroke helpers, eraser hit-testing, and CRDT convergence of concurrent strokes between two docs.
-- **`apps/web/e2e/multiplayer.spec.ts`** opens two browser contexts in one room, draws in one, and asserts the stroke and presence show up in the other.
+- **`apps/web/e2e/multiplayer.spec.ts`** opens two browser contexts in one room, draws in one, and asserts the stroke and presence show up in the other (also run in CI).
+- **`apps/web/lib/sync-watchdog.test.ts`**, **`stroke-batcher.test.ts`**: hung-session guard and rAF stroke batching.
 
 ---
 
@@ -216,16 +218,19 @@ Open the same room on :3000 and :3001. Each window talks to a different server, 
 ### Sync server → Render
 
 1. Push the repo to GitHub.
-2. In Render: **New → Blueprint**, pick the repo, and set **Blueprint Path** to `apps/server/render.yaml`. It creates:
-   - `liveboard-sync`: Node web service with health check `/healthz`
-   - `liveboard-db`: Postgres
-   - `liveboard-kv`: Key Value (Redis-compatible), private
-3. Fill in the two `sync: false` secrets:
-   - `LIVEBOARD_JWT_SECRET`: the same value you'll give Vercel
+2. In Render: **New → Blueprint**, pick the repo, and set **Blueprint Path** to `apps/server/render.yaml`. The default blueprint creates:
+   - `liveboard-sync`: **free** Node web service (`plan: free`) with health check `/healthz`
+   - `PERSISTENCE=memory` (rooms survive while the instance stays up; data is lost on redeploy/spin-down)
+3. Fill in the `sync: false` secrets:
+   - `LIVEBOARD_JWT_SECRET`: the same value you'll give Vercel (≥ 32 characters)
    - `ALLOWED_ORIGINS`: e.g. `https://liveboard.vercel.app`
 4. Note the service URL, e.g. `https://liveboard-sync.onrender.com`. The client uses `wss://liveboard-sync.onrender.com`.
 
-The Blueprint builds from the repo root (`pnpm install --frozen-lockfile && pnpm turbo run build --filter=@liveboard/server`) and starts with `node apps/server/dist/index.js`. On deploy, Render sends `SIGTERM`. The server closes sockets with `1001` and flushes writes, and clients reconnect to the new instance on their own. Use a paid instance type: free instances spin down when idle, and that disconnects everyone.
+The Blueprint builds from the repo root (`pnpm install --frozen-lockfile && pnpm turbo run build --filter=@liveboard/server`) and starts with `node apps/server/dist/index.js`. On deploy, Render sends `SIGTERM`; the server force-closes WebSockets and ends the underlying TCP session so clients fail fast instead of hanging until a proxy timeout.
+
+**Free tier caveats:** Render free web services **spin down after ~15 minutes of inactivity**, which drops every open socket. For always-on demos, use a paid instance plan.
+
+**Upgrade path (optional, paid):** uncomment the Postgres / Key Value blocks in `apps/server/render.yaml`, set `PERSISTENCE=postgres`, wire `DATABASE_URL`, and optionally `REDIS_URL` for multi-instance fan-out. See [Scaling notes](#-scaling-notes).
 
 ### Web → Vercel
 
