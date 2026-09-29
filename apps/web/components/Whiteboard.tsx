@@ -46,7 +46,7 @@ import { exportBoardPdf, exportBoardPng } from "@/lib/export-board";
 import { NoteLayer } from "./NoteLayer";
 import { BoardSidePanel } from "./BoardSidePanel";
 import { readBoardMeta, writeBoardMeta } from "@/lib/board-meta";
-import { isBoundToDoc, readStrokeCount } from "@/lib/page-model";
+import { addPageToUndoScope, isBoundToDoc, readStrokeCount } from "@/lib/page-model";
 import { stabilizePoint } from "@/lib/stroke-stabilizer";
 import { recognizeStrokeShape } from "@/lib/shape-recognize";
 import { getAssets, readAsset, type BoardAsset } from "@/lib/assets";
@@ -215,14 +215,13 @@ export function Whiteboard({
     if (!doc) return;
     if (!undoRef.current) {
       undoRef.current = new Y.UndoManager([], {
+        doc,
         trackedOrigins: new Set([LOCAL_ORIGIN]),
         captureTimeout: 300,
       });
     }
-    for (const t of [strokes, shapesMap, notesMap, assetsMap]) {
-      if (t && isBoundToDoc(doc, t)) undoRef.current.addToScope(t);
-    }
-  }, [doc, strokes, shapesMap, notesMap, assetsMap]);
+    addPageToUndoScope(undoRef.current, doc, activePageId);
+  }, [doc, activePageId]);
 
   useEffect(() => {
     return () => {
@@ -603,13 +602,13 @@ export function Whiteboard({
       if (now - lastActivityRef.current > AUTO_SNAPSHOT_INTERVAL_MS) return;
       if (now - lastAutoSnapshotRef.current < AUTO_SNAPSHOT_INTERVAL_MS) return;
       lastAutoSnapshotRef.current = now;
-      pushSnapshot(doc, `Auto ${new Date().toLocaleTimeString()}`);
+      pushSnapshot(doc, `Auto ${new Date().toLocaleTimeString()}`, activePageId);
     }, 30_000);
     return () => {
       clearInterval(timer);
       doc.off("update", bump);
     };
-  }, [doc, readOnly]);
+  }, [doc, readOnly, activePageId]);
 
   useEffect(() => {
     scheduleFrame(true);
@@ -1392,7 +1391,7 @@ export function Whiteboard({
             onRestoreSnapshot={(snap) => {
               setHistoryPreview(null);
               beginAction();
-              restoreHistorySnapshot(doc, snap);
+              restoreHistorySnapshot(doc, snap, activePageId);
               setAssetRevision((n) => n + 1);
             }}
             onAddFrame={() => {

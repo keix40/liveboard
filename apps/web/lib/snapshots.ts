@@ -16,14 +16,14 @@ export function getSnapshots(doc: Y.Doc): Y.Array<Y.Map<unknown>> {
   return doc.getArray(YKEYS.snapshots);
 }
 
-export function pushSnapshot(doc: Y.Doc, label: string): void {
+export function pushSnapshot(doc: Y.Doc, label: string, pageId?: string): void {
   doc.transact(() => {
     const arr = getSnapshots(doc);
     const entry = new Y.Map<unknown>();
     entry.set("id", crypto.randomUUID());
     entry.set("label", label);
     entry.set("createdAt", Date.now());
-    entry.set("page", JSON.stringify(capturePageSnapshot(doc)));
+    entry.set("page", JSON.stringify(capturePageSnapshot(doc, pageId)));
     arr.push([entry]);
     while (arr.length > MAX_SNAPSHOTS) arr.delete(0, 1);
   }, LOCAL_ORIGIN);
@@ -44,8 +44,8 @@ export function readSnapshot(m: Y.Map<unknown>): HistorySnapshot {
 }
 
 /** Restore board content from a history entry (undoable, syncs to peers). */
-export function restoreHistorySnapshot(doc: Y.Doc, snap: PageSnapshot): void {
-  restorePageSnapshot(doc, snap);
+export function restoreHistorySnapshot(doc: Y.Doc, snap: PageSnapshot, pageId?: string): void {
+  restorePageSnapshot(doc, snap, pageId);
 }
 
 export function listHistorySnapshots(doc: Y.Doc): HistorySnapshot[] {

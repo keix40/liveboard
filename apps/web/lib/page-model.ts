@@ -70,6 +70,20 @@ export function readStrokeCount(doc: Y.Doc, pageId?: string): number {
   return doc.getArray(key).length;
 }
 
+/** Top-level page content types for UndoManager scope (getArray/getMap is safe for merge). */
+export function pageUndoScopeTypes(doc: Y.Doc, pageId: string): Y.AbstractType<any>[] {
+  return [
+    doc.getArray(pageContentKey("strokes", pageId)),
+    doc.getMap(pageContentKey("shapes", pageId)),
+    doc.getMap(pageContentKey("notes", pageId)),
+    doc.getMap(pageContentKey("assets", pageId)),
+  ];
+}
+
+export function addPageToUndoScope(undo: Y.UndoManager, doc: Y.Doc, pageId: string): void {
+  undo.addToScope(pageUndoScopeTypes(doc, pageId));
+}
+
 export function writePageMetadata(doc: Y.Doc, pageId: string, name?: string): void {
   const pages = doc.getMap(YKEYS.pages);
   if (pages.has(pageId)) return;

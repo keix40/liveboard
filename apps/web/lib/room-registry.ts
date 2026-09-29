@@ -10,6 +10,7 @@ export interface RoomRegistryRow {
 const memory = new Map<string, string>();
 
 let pool: pg.Pool | null = null;
+let roomRegistrySchemaPromise: Promise<void> | null = null;
 
 function getPool(): pg.Pool | null {
   const url = process.env.DATABASE_URL;
@@ -31,13 +32,22 @@ export function generateRoomEditSecret(): string {
 export async function initRoomRegistrySchema(): Promise<void> {
   const p = getPool();
   if (!p) return;
-  await p.query(`
+  if (!roomRegistrySchemaPromise) {
+    roomRegistrySchemaPromise = p
+      .query(`
     CREATE TABLE IF NOT EXISTS liveboard_rooms (
       room_id TEXT PRIMARY KEY,
       edit_cap_hash TEXT NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
-  `);
+  `)
+      .then(() => undefined)
+      .catch((err) => {
+        roomRegistrySchemaPromise = null;
+        throw err;
+      });
+  }
+  await roomRegistrySchemaPromise;
 }
 
 export async function getRoomRecord(roomId: string): Promise<RoomRegistryRow | null> {

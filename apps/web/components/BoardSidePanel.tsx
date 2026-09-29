@@ -230,7 +230,9 @@ export function BoardSidePanel(p: Props) {
           type="button"
           data-testid="snapshot-save"
           disabled={p.readOnly}
-          onClick={() => pushSnapshot(p.doc, `Snapshot ${new Date().toLocaleTimeString()}`)}
+          onClick={() =>
+            pushSnapshot(p.doc, `Snapshot ${new Date().toLocaleTimeString()}`, p.activePageId)
+          }
         >
           Snapshot
         </button>
