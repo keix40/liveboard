@@ -1,6 +1,12 @@
 import * as Y from "yjs";
 import { YKEYS, type Shape, type ShapeField, type ShapeKind } from "@liveboard/shared";
-import { distanceToSegment, isLineLikeKind, lineLikeBounds } from "./shape-geometry";
+import {
+  arrowHeadLength,
+  arrowShaftEnd,
+  distanceToSegment,
+  isLineLikeKind,
+  lineLikeBounds,
+} from "./shape-geometry";
 import { LOCAL_ORIGIN } from "./strokes";
 
 export type YShape = Y.Map<unknown>;
@@ -72,8 +78,10 @@ export function hitShape(s: Shape, wx: number, wy: number, pad = 6): boolean {
     const end = { x: s.x + s.w, y: s.y + s.h };
     const hitWidth = Math.max(pad, s.strokeWidth / 2 + pad);
     if (s.kind === "arrow") {
-      const head = Math.max(8, s.strokeWidth * 3);
+      const head = arrowHeadLength(s.strokeWidth);
       if (Math.hypot(wx - end.x, wy - end.y) <= head + pad) return true;
+      const base = arrowShaftEnd(s.x, s.y, end.x, end.y, head);
+      return distanceToSegment(wx, wy, s.x, s.y, base.x, base.y) <= hitWidth;
     }
     return distanceToSegment(wx, wy, s.x, s.y, end.x, end.y) <= hitWidth;
   }

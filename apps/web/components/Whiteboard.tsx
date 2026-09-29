@@ -372,7 +372,7 @@ export function Whiteboard({
           if (prev.size === next.size && [...next.keys()].every((k) => prev.get(k) === next.get(k))) return prev;
           return next;
         });
-        scheduleFrame(true);
+        setAssetRevision((n) => n + 1);
       }
     };
     void load();

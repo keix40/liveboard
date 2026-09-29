@@ -5,6 +5,7 @@ import { readNote, type YNote } from "./notes";
 import type { BoardBackground } from "@liveboard/shared";
 import type { SelectableRef } from "./selection";
 import type { BoardAsset } from "./assets";
+import { arrowHeadLength, arrowShaftEnd } from "./shape-geometry";
 
 export interface RenderBoardOpts {
   camera: Camera;
@@ -64,14 +65,18 @@ function drawShape(ctx: CanvasRenderingContext2D, s: ReturnType<typeof readShape
       ctx.lineTo(x2, y2);
       ctx.stroke();
       break;
-    case "arrow":
+    case "arrow": {
+      const headLen = arrowHeadLength(s.strokeWidth);
+      const base = arrowShaftEnd(s.x, s.y, x2, y2, headLen);
+      ctx.lineCap = "butt";
       ctx.beginPath();
       ctx.moveTo(s.x, s.y);
-      ctx.lineTo(x2, y2);
+      ctx.lineTo(base.x, base.y);
       ctx.stroke();
       ctx.fillStyle = s.stroke;
-      drawArrowHead(ctx, s.x, s.y, x2, y2, Math.max(8, s.strokeWidth * 3));
+      drawArrowHead(ctx, s.x, s.y, x2, y2, headLen);
       break;
+    }
     case "text":
       ctx.font = `${Math.max(14, s.h)}px ui-sans-serif, system-ui, sans-serif`;
       ctx.fillStyle = s.stroke;
