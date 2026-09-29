@@ -2,9 +2,9 @@ import { timingSafeEqual } from "node:crypto";
 import { SignJWT } from "jose";
 import { NextResponse } from "next/server";
 import { isValidRoomId, JWT_AUDIENCE, JWT_ISSUER } from "@liveboard/shared";
-import { verifyCapability } from "@/lib/capabilities-server";
 import { clientIpFromRequest, tokenRateLimit } from "@/lib/token-rate-limit";
-import { getRoomRecord, initRoomRegistrySchema, verifyEditCapability } from "@/lib/room-registry";
+import { evaluateTokenAccess } from "@/lib/token-policy";
+import { getRoomRecord, initRoomRegistrySchema } from "@/lib/room-registry";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -67,18 +67,18 @@ export async function POST(req: Request) {
   }
 
   const record = await getRoomRecord(room);
-  const legacyOpen = record === null;
-
-  let role: "editor" | "viewer" = requestedRole;
-  if (role === "viewer") {
-    if (viewCap && !verifyCapability(room, secret, viewCap, "view")) {
-      return NextResponse.json({ error: "invalid view capability" }, { status: 403 });
-    }
-  } else if (!legacyOpen) {
-    if (!record || !editCap || !verifyEditCapability(room, secret, editCap, record.editCapHash)) {
-      return NextResponse.json({ error: "edit capability required" }, { status: 403 });
-    }
+  const access = evaluateTokenAccess({
+    record,
+    requestedRole,
+    room,
+    jwtSecret: secret,
+    editCap,
+    viewCap,
+  });
+  if (!access.ok) {
+    return NextResponse.json({ error: access.error, code: access.code }, { status: 403 });
   }
+  const { role, legacyOpen } = access;
 
   const sub = crypto.randomUUID();
   const expiresAt = Math.floor(Date.now() / 1000) + TOKEN_TTL_SEC;
