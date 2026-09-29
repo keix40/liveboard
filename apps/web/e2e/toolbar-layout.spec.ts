@@ -1,5 +1,16 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { TOOLBAR_HIT_TEST_IDS } from "../components/Toolbar";
+
+/** WebKit often never sees toolbar controls as "stable" inside horizontal scroll. */
+async function focusToolbarControl(page: Page, id: string) {
+  const scroll = page.getByTestId("toolbar-scroll");
+  const el = page.getByTestId(id);
+  await expect(el).toBeVisible();
+  await scroll.evaluate((root, testId) => {
+    const btn = root.querySelector(`[data-testid="${testId}"]`) as HTMLElement | null;
+    btn?.scrollIntoView({ block: "nearest", inline: "center" });
+  }, id);
+}
 
 const VIEWPORTS = [
   { width: 390, height: 844, name: "iphone" },
@@ -19,9 +30,8 @@ for (const vp of VIEWPORTS) {
     const chromeBox = (await chrome.boundingBox())!;
 
     for (const id of TOOLBAR_HIT_TEST_IDS) {
+      await focusToolbarControl(page, id);
       const el = page.getByTestId(id);
-      await el.scrollIntoViewIfNeeded();
-      await expect(el).toBeVisible();
       const box = (await el.boundingBox())!;
       const cx = box.x + box.width / 2;
       const cy = box.y + box.height / 2;
@@ -56,13 +66,15 @@ test("HUD does not overlap toolbar tools", async ({ page }) => {
   const status = page.getByTestId("status");
   const pen = page.getByTestId("tool-pen");
   await expect(status).toBeVisible();
-  await pen.scrollIntoViewIfNeeded();
+  await focusToolbarControl(page, "tool-pen");
   const statusBox = (await status.boundingBox())!;
   const penBox = (await pen.boundingBox())!;
   expect(statusBox).not.toBeNull();
   expect(penBox).not.toBeNull();
   expect(statusBox.y + statusBox.height).toBeLessThanOrEqual(penBox.y + penBox.height + 2);
-  expect(Math.abs(statusBox.y - penBox.y)).toBeLessThanOrEqual(14);
+  const statusCy = statusBox.y + statusBox.height / 2;
+  const penCy = penBox.y + penBox.height / 2;
+  expect(Math.abs(statusCy - penCy)).toBeLessThanOrEqual(4);
 });
 
 test("status pills do not cover export buttons at desktop width", async ({ page }) => {
@@ -70,7 +82,7 @@ test("status pills do not cover export buttons at desktop width", async ({ page 
   await page.goto(`/board/hud-desktop-${Date.now()}`);
   const status = page.getByTestId("status");
   const pdf = page.getByTestId("tool-export-pdf");
-  await pdf.scrollIntoViewIfNeeded();
+  await focusToolbarControl(page, "tool-export-pdf");
   const statusBox = (await status.boundingBox())!;
   const pdfBox = (await pdf.boundingBox())!;
   expect(statusBox.y + statusBox.height).toBeLessThanOrEqual(pdfBox.y + 1);

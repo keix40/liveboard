@@ -2,7 +2,12 @@ import type { Camera } from "./camera";
 import { readStroke, strokePath, type YStroke } from "./strokes";
 import { readShape, type YShape } from "./shapes";
 import { readNote, type YNote } from "./notes";
+import type { BoardBackground } from "@liveboard/shared";
 import type { SelectableRef } from "./selection";
+import type { BoardAsset } from "./assets";
+import type { BoardReaction } from "./reactions";
+import type { PinnedComment } from "./comments";
+import { arrowHeadLength, arrowShaftEnd } from "./shape-geometry";
 
 export interface RenderBoardOpts {
   camera: Camera;
@@ -18,6 +23,12 @@ export interface RenderBoardOpts {
   /** Stroke indices to draw on the overlay (live ink); omitted from base when base excludes them. */
   liveStrokeIndices?: number[];
   excludeStrokeIndicesFromBase?: number[];
+  background?: BoardBackground;
+  darkMode?: boolean;
+  assets?: Map<string, BoardAsset>;
+  assetImages?: Map<string, CanvasImageSource>;
+  reactions?: BoardReaction[];
+  comments?: PinnedComment[];
 }
 
 function applyCamera(ctx: CanvasRenderingContext2D, cam: Camera, dpr: number): void {
@@ -58,14 +69,18 @@ function drawShape(ctx: CanvasRenderingContext2D, s: ReturnType<typeof readShape
       ctx.lineTo(x2, y2);
       ctx.stroke();
       break;
-    case "arrow":
+    case "arrow": {
+      const headLen = arrowHeadLength(s.strokeWidth);
+      const base = arrowShaftEnd(s.x, s.y, x2, y2, headLen);
+      ctx.lineCap = "butt";
       ctx.beginPath();
       ctx.moveTo(s.x, s.y);
-      ctx.lineTo(x2, y2);
+      ctx.lineTo(base.x, base.y);
       ctx.stroke();
       ctx.fillStyle = s.stroke;
-      drawArrowHead(ctx, s.x, s.y, x2, y2, Math.max(8, s.strokeWidth * 3));
+      drawArrowHead(ctx, s.x, s.y, x2, y2, headLen);
       break;
+    }
     case "text":
       ctx.font = `${Math.max(14, s.h)}px ui-sans-serif, system-ui, sans-serif`;
       ctx.fillStyle = s.stroke;
@@ -76,14 +91,50 @@ function drawShape(ctx: CanvasRenderingContext2D, s: ReturnType<typeof readShape
   ctx.restore();
 }
 
-function drawGrid(ctx: CanvasRenderingContext2D, camera: Camera, cssWidth: number, cssHeight: number): void {
-  ctx.strokeStyle = "#e2e8f0";
+function drawBackground(
+  ctx: CanvasRenderingContext2D,
+  camera: Camera,
+  cssWidth: number,
+  cssHeight: number,
+  background: BoardBackground,
+  darkMode: boolean,
+): void {
+  const line = darkMode ? "#334155" : "#e2e8f0";
+  const dot = darkMode ? "#475569" : "#cbd5e1";
+  ctx.strokeStyle = line;
+  ctx.fillStyle = dot;
   ctx.lineWidth = 1 / camera.zoom;
   const step = 64;
   const vw = cssWidth / camera.zoom;
   const vh = cssHeight / camera.zoom;
   const ox = -camera.x / camera.zoom;
   const oy = -camera.y / camera.zoom;
+  if (background === "blank") {
+    if (darkMode) {
+      ctx.fillStyle = "#0f172a";
+      ctx.fillRect(ox, oy, vw, vh);
+    }
+    return;
+  }
+  if (background === "dots") {
+    for (let x = Math.floor(ox / step) * step; x < ox + vw; x += step) {
+      for (let y = Math.floor(oy / step) * step; y < oy + vh; y += step) {
+        ctx.beginPath();
+        ctx.arc(x, y, 1.2 / camera.zoom, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    return;
+  }
+  if (background === "lined") {
+    for (let y = Math.floor(oy / step) * step; y < oy + vh; y += step) {
+      ctx.beginPath();
+      ctx.moveTo(ox, y);
+      ctx.lineTo(ox + vw, y);
+      ctx.stroke();
+    }
+    return;
+  }
   for (let x = Math.floor(ox / step) * step; x < ox + vw; x += step) {
     ctx.beginPath();
     ctx.moveTo(x, oy);
@@ -110,11 +161,40 @@ function drawStrokeAt(ctx: CanvasRenderingContext2D, s: YStroke): void {
 
 /** Committed board content (grid, shapes, notes, strokes). */
 export function renderBoardBase(ctx: CanvasRenderingContext2D, opts: RenderBoardOpts): void {
-  const { camera, dpr, cssWidth, cssHeight, strokes, shapes, notes, excludeStrokeIndicesFromBase } = opts;
+  const {
+    camera,
+    dpr,
+    cssWidth,
+    cssHeight,
+    strokes,
+    shapes,
+    notes,
+    excludeStrokeIndicesFromBase,
+    background = "grid",
+    darkMode = false,
+    assets,
+    assetImages,
+  } = opts;
   const skip = new Set(excludeStrokeIndicesFromBase ?? []);
   ctx.save();
   applyCamera(ctx, camera, dpr);
-  drawGrid(ctx, camera, cssWidth, cssHeight);
+  drawBackground(ctx, camera, cssWidth, cssHeight, background, darkMode);
+
+  if (assets && assetImages) {
+    const assetList = [...assets.values()].sort((a, b) => a.z - b.z);
+    for (const a of assetList) {
+      const img = assetImages.get(a.id);
+      if (!img) continue;
+      ctx.drawImage(img, a.x, a.y, a.w, a.h);
+      if (a.locked) {
+        ctx.strokeStyle = "rgb(100 116 139 / 0.55)";
+        ctx.lineWidth = 2 / camera.zoom;
+        ctx.setLineDash([6 / camera.zoom, 4 / camera.zoom]);
+        ctx.strokeRect(a.x, a.y, a.w, a.h);
+        ctx.setLineDash([]);
+      }
+    }
+  }
 
   const shapeList = [...shapes.values()].map(readShape).sort((a, b) => a.z - b.z);
   for (const sh of shapeList) drawShape(ctx, sh);
@@ -176,6 +256,38 @@ export function renderBoardOverlay(ctx: CanvasRenderingContext2D, opts: RenderBo
     ctx.setLineDash([]);
   }
 
+  if (opts.reactions?.length) {
+    ctx.font = `${16 / camera.zoom}px system-ui, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (const r of opts.reactions) {
+      ctx.fillText(r.emoji, r.x, r.y);
+    }
+  }
+  if (opts.comments?.length) {
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillStyle = opts.darkMode ? "#f8fafc" : "#0f172a";
+    for (const c of opts.comments) {
+      if (!c.pinned) continue;
+      ctx.fillStyle = opts.darkMode ? "#1e293b" : "#ffffff";
+      ctx.strokeStyle = opts.darkMode ? "#64748b" : "#94a3b8";
+      ctx.lineWidth = 1 / camera.zoom;
+      const w = 28 / camera.zoom;
+      const h = 22 / camera.zoom;
+      ctx.fillRect(c.x, c.y, w, h);
+      ctx.strokeRect(c.x, c.y, w, h);
+      ctx.fillStyle = opts.darkMode ? "#e2e8f0" : "#0f172a";
+      ctx.font = `${10 / camera.zoom}px system-ui, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.fillText("💬", c.x + w / 2, c.y + h / 2);
+      const label = c.text.length > 48 ? `${c.text.slice(0, 45)}…` : c.text;
+      ctx.textAlign = "left";
+      ctx.font = `${11 / camera.zoom}px system-ui, sans-serif`;
+      ctx.fillStyle = opts.darkMode ? "#e2e8f0" : "#334155";
+      ctx.fillText(label, c.x, c.y + h + 14 / camera.zoom);
+    }
+  }
+
   if (selection && selection.length > 0) {
     ctx.strokeStyle = "#2563eb";
     ctx.lineWidth = 2 / camera.zoom;
@@ -186,6 +298,9 @@ export function renderBoardOverlay(ctx: CanvasRenderingContext2D, opts: RenderBo
       } else if (sel.kind === "note") {
         const n = readNote(notes.get(sel.id)!);
         ctx.strokeRect(n.x - 4, n.y - 4, n.w + 8, n.h + 8);
+      } else if (sel.kind === "asset" && opts.assets) {
+        const a = opts.assets.get(sel.id);
+        if (a) ctx.strokeRect(a.x - 4, a.y - 4, a.w + 8, a.h + 8);
       }
     }
   }
@@ -201,7 +316,7 @@ export function renderBoard(canvas: HTMLCanvasElement, opts: Omit<RenderBoardOpt
   const cssHeight = opts.cssHeight ?? canvas.clientHeight;
   const full: RenderBoardOpts = { ...opts, cssWidth, cssHeight };
   ctx.setTransform(opts.dpr, 0, 0, opts.dpr, 0, 0);
-  ctx.fillStyle = "#f8fafc";
+  ctx.fillStyle = full.darkMode ? "#0f172a" : "#f8fafc";
   ctx.fillRect(0, 0, cssWidth, cssHeight);
   renderBoardBase(ctx, full);
   renderBoardOverlay(ctx, full);

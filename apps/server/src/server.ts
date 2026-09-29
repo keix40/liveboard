@@ -28,6 +28,14 @@ export interface SyncServerOptions {
 
 type Alive = WebSocket & { isAlive?: boolean };
 
+function decodePathSegment(segment: string): string | null {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return null;
+  }
+}
+
 function rejectHttp(socket: Duplex, status: number, message: string) {
   socket.write(
     `HTTP/1.1 ${status} ${message}\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: ${Buffer.byteLength(message)}\r\n\r\n${message}`,
@@ -50,6 +58,26 @@ export function createSyncServer(cfg: ServerConfig, opts: SyncServerOptions = {}
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://internal");
+    if (url.pathname.startsWith("/internal/rooms/") && url.pathname.endsWith("/has-content")) {
+      const secret = cfg.internalSecret;
+      const hdr = req.headers["x-liveboard-internal"];
+      const token = Array.isArray(hdr) ? hdr[0] : hdr;
+      if (!secret || token !== secret) {
+        res.writeHead(403, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "forbidden" }));
+        return;
+      }
+      const roomId = decodePathSegment(url.pathname.slice("/internal/rooms/".length, -"/has-content".length));
+      if (!roomId || !isValidRoomId(roomId)) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid room" }));
+        return;
+      }
+      const hasContent = await persistence.roomHasContent(roomId);
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ hasContent }));
+      return;
+    }
     if (url.pathname === "/healthz") {
       const body: HealthResponse = {
         status: "ok",
@@ -75,12 +103,12 @@ export function createSyncServer(cfg: ServerConfig, opts: SyncServerOptions = {}
     if (shuttingDown) return rejectHttp(socket, 503, "Shutting Down");
 
     const url = new URL(req.url ?? "/", "http://internal");
-    const roomId = decodeURIComponent(url.pathname.slice(1));
+    const roomId = decodePathSegment(url.pathname.slice(1));
     const origin = req.headers.origin;
     const ip = clientIp(req);
 
     if (!upgradeLimiter.hit(ip)) return rejectHttp(socket, 429, "Too Many Requests");
-    if (!isValidRoomId(roomId)) return rejectHttp(socket, 400, "Bad Room Id");
+    if (!roomId || !isValidRoomId(roomId)) return rejectHttp(socket, 400, "Bad Room Id");
     if (cfg.allowedOrigins.length > 0 && (!origin || !cfg.allowedOrigins.includes(origin))) {
       return rejectHttp(socket, 403, "Origin Not Allowed");
     }

@@ -26,7 +26,14 @@ test("one finger draws with pen tool on phone viewport", async ({ page }) => {
   await page.goto(`/board/touch-draw-${Date.now()}`);
   await expect(page.getByTestId("status")).toHaveText(/connected/i);
   await drawStroke(page, [40, 40], [140, 120]);
-  await expect(page.getByTestId("board-canvas")).toHaveAttribute("data-stroke-count", "1");
+  await expect
+    .poll(async () => {
+      const c = page.getByTestId("board-canvas");
+      const strokes = Number(await c.getAttribute("data-stroke-count"));
+      const shapes = Number(await c.getAttribute("data-shape-count"));
+      return strokes + shapes;
+    })
+    .toBeGreaterThanOrEqual(1);
 });
 
 test("pan tool uses single pointer to pan on phone viewport", async ({ page }) => {

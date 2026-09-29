@@ -4,10 +4,6 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { isValidRoomId } from "@liveboard/shared";
 
-function randomRoomId() {
-  return Math.random().toString(36).slice(2, 10);
-}
-
 export default function Home() {
   const router = useRouter();
   const [room, setRoom] = useState("");
@@ -32,7 +28,33 @@ export default function Home() {
         <button className="btn secondary" type="submit" disabled={!valid}>
           Join
         </button>
-        <button className="btn" type="button" onClick={() => router.push(`/board/${randomRoomId()}`)}>
+        <button
+          className="btn"
+          type="button"
+          onClick={async () => {
+            const res = await fetch("/api/rooms/create", { method: "POST" });
+            if (!res.ok) return;
+            const data = (await res.json()) as {
+              room?: string;
+              editCap?: string;
+              editLink?: string;
+              viewLink?: string;
+            };
+            if (!data.room || !data.editCap) return;
+            try {
+              localStorage.setItem(`liveboard:edit:${data.room}`, data.editCap);
+              if (data.editLink && data.viewLink) {
+                sessionStorage.setItem(
+                  `liveboard:share:${data.room}`,
+                  JSON.stringify({ editLink: data.editLink, viewLink: data.viewLink }),
+                );
+              }
+            } catch {
+              /* ignore */
+            }
+            router.push(`/board/${data.room}?shared=1`);
+          }}
+        >
           New board
         </button>
       </form>

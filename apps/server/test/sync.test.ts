@@ -9,6 +9,7 @@ import { signRoomToken } from "../src/auth.js";
 import { createLogger } from "../src/logger.js";
 import { CloseCode, MessageType, parseAppCloseCode } from "@liveboard/shared";
 import * as encoding from "lib0/encoding";
+import * as syncProtocol from "y-protocols/sync";
 
 const SECRET = "test-secret-test-secret-test-secret-123";
 let server: SyncServer;
@@ -95,14 +96,39 @@ describe("sync server", () => {
     b.provider.destroy();
   });
 
-  it("ignores writes from viewers", async () => {
-    const editor = await connect("room-view", await token("room-view"));
-    const viewer = await connect("room-view", await token("room-view", "viewer"));
-    await waitFor(() => editor.provider.synced && viewer.provider.synced);
-    viewer.doc.getArray<number>("strokes").push([42]);
+  it("kicks one client on oversize update without blocking others", async () => {
+    const room = `room-reject-${Date.now()}`;
+    const a = await connect(room, await token(room));
+    const b = await connect(room, await token(room));
+    await waitFor(() => a.provider.synced && b.provider.synced);
+    a.doc.getArray<number>("strokes").push([1]);
+    await waitFor(() => b.doc.getArray("strokes").length === 1);
+
+    const ws = a.provider.ws as unknown as WebSocket;
+    const huge = new Uint8Array(600 * 1024);
+    huge[0] = 1;
+    const enc = encoding.createEncoder();
+    encoding.writeVarUint(enc, MessageType.Sync);
+    encoding.writeVarUint(enc, syncProtocol.messageYjsUpdate);
+    encoding.writeVarUint8Array(enc, huge);
+    ws.send(encoding.toUint8Array(enc), { binary: true });
+    await waitFor(() => ws.readyState === WebSocket.CLOSED, 3000);
+
+    b.doc.getArray<number>("strokes").push([2]);
+    await waitFor(() => b.doc.getArray("strokes").length === 2, 5000);
+    expect(b.doc.getArray("strokes").toArray()).toEqual([1, 2]);
+    b.provider.destroy();
+  });
+
+  it("rejects writes from viewers without mutating the room", async () => {
+    const room = `room-view-${Date.now()}`;
+    const editor = await connect(room, await token(room));
+    const viewer = await connect(room, await token(room, "viewer"));
+    await waitFor(() => editor.provider.synced && viewer.provider.synced, 10_000);
     editor.doc.getArray<number>("strokes").push([7]);
     await waitFor(() => viewer.doc.getArray("strokes").toArray().includes(7));
-    await new Promise((r) => setTimeout(r, 100));
+    viewer.doc.getArray<number>("strokes").push([42]);
+    await new Promise((r) => setTimeout(r, 200));
     expect(editor.doc.getArray("strokes").toArray()).toEqual([7]);
     editor.provider.destroy();
     viewer.provider.destroy();

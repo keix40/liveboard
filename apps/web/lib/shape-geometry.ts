@@ -32,6 +32,28 @@ export function distanceToSegment(
   return Math.hypot(px - qx, py - qy);
 }
 
+/** Arrowhead length along the shaft (matches render-board). */
+export function arrowHeadLength(strokeWidth: number): number {
+  return Math.max(8, strokeWidth * 3);
+}
+
+/** Point where the shaft should end (base of the filled arrowhead at the tip). */
+export function arrowShaftEnd(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  headLen: number,
+): { x: number; y: number } {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy);
+  if (len <= headLen || len === 0) return { x: x1, y: y1 };
+  const ux = dx / len;
+  const uy = dy / len;
+  return { x: x2 - ux * headLen, y: y2 - uy * headLen };
+}
+
 export function lineLikeBounds(s: Pick<Shape, "x" | "y" | "w" | "h">): {
   minX: number;
   minY: number;

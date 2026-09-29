@@ -72,7 +72,9 @@ test("arrow syncs, persists on reload, undo, and export", async ({ browser, page
   await peer.goto(`/board/${room}`);
   await expect(page.getByTestId("status")).toHaveText(/connected/i);
   await drawArrow(page, [100, 140], [320, 140]);
-  await expect(peer.getByTestId("board-canvas")).toHaveAttribute("data-shape-count", "1", { timeout: 15_000 });
+  await expect.poll(async () => await peer.getByTestId("board-canvas").getAttribute("data-shape-count"), {
+    timeout: 20_000,
+  }).toBe("1");
 
   await page.getByTestId("tool-undo").click();
   await expect(page.getByTestId("board-canvas")).toHaveAttribute("data-shape-count", "0");

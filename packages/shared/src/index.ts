@@ -10,7 +10,7 @@
  *   └── "meta"    : Y.Map<unknown>                board title, createdAt, schemaVersion
  */
 
-export const DOC_SCHEMA_VERSION = 1;
+export const DOC_SCHEMA_VERSION = 3;
 
 /** Top-level shared type names inside the Y.Doc. */
 export const YKEYS = {
@@ -18,7 +18,43 @@ export const YKEYS = {
   shapes: "shapes",
   notes: "notes",
   meta: "meta",
+  pages: "pages",
+  pageSnapshots: "pageSnapshots",
+  assets: "assets",
+  snapshots: "snapshots",
+  comments: "comments",
+  reactions: "reactions",
 } as const;
+
+/** Per-asset binary budget (compressed base64 in Yjs). See docs/ASSET_LIMITS.md */
+export const ASSET_MAX_BYTES = 200_000;
+export const ASSET_ROOM_MAX_BYTES = 600_000;
+export const ASSET_MAX_DECOMPRESSED_BYTES = 400_000;
+export const ASSET_MAX_IMAGE_DIMENSION = 8192;
+export const PDF_MAX_BYTES = 2_000_000;
+export const PDF_MAX_PAGES = 10;
+
+export const MAX_LOCKED_IDS = 500;
+
+/** Server-side room storage budget (rebased doc size + incoming update upper bound between compactions). */
+export const ROOM_MAX_STORED_BYTES = 8 * 1024 * 1024;
+export const ROOM_MAX_SINGLE_UPDATE_BYTES = 512 * 1024;
+
+export type BoardBackground = "blank" | "grid" | "dots" | "lined";
+export type BoardTemplate = "none" | "kanban" | "mindmap" | "wireframe" | "retro";
+
+/** Named viewport region for navigation and per-frame export. */
+export interface BoardFrame {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Auto history snapshots at most every 5 minutes while the board is active. */
+export const AUTO_SNAPSHOT_INTERVAL_MS = 5 * 60 * 1000;
 
 /** y-websocket-compatible top-level message types (first varUint of every frame). */
 export const MessageType = {
@@ -46,6 +82,7 @@ export const CloseCode = {
   Forbidden: 4403,
   RoomFull: 4429,
   RateLimited: 4408,
+  RoomStorageCap: 4410,
 } as const;
 
 /** Room ids are URL-safe so they can live in the WS path: wss://host/<roomId> */
@@ -134,6 +171,9 @@ export interface AwarenessState {
   tool?: Tool;
   /** Ids of objects currently selected by this user (for remote selection outlines). */
   selection?: string[];
+  /** Presenter camera broadcast (presenter mode). */
+  camera?: { x: number; y: number; zoom: number };
+  presenter?: boolean;
 }
 
 // ─── Auth ─────────────────────────────────────────────────────────────────
@@ -174,6 +214,14 @@ export function colorForId(id: string): string {
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
   return CURSOR_COLORS[Math.abs(h) % CURSOR_COLORS.length]!;
 }
+
+export {
+  DEFAULT_PAGE_ID,
+  allPageContentKeys,
+  pageContentKey,
+  pageIdFromContentKey,
+  type PageContentKind,
+} from "./page-keys.js";
 
 export interface HealthResponse {
   status: "ok";

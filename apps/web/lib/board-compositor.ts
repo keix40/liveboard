@@ -36,12 +36,15 @@ export class BoardCompositor {
     return true;
   }
 
-  paintBase(paint: (ctx: CanvasRenderingContext2D, dpr: number) => void): void {
+  paintBase(
+    paint: (ctx: CanvasRenderingContext2D, dpr: number) => void,
+    backgroundCss = "#f8fafc",
+  ): void {
     if (!this.baseDirty) return;
     const ctx = this.base.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    ctx.fillStyle = "#f8fafc";
+    ctx.fillStyle = backgroundCss;
     ctx.fillRect(0, 0, this.cssW, this.cssH);
     paint(ctx, this.dpr);
     this.baseDirty = false;

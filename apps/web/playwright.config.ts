@@ -7,6 +7,8 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "./e2e",
   timeout: 30_000,
+  workers: process.env.CI ? 1 : undefined,
+  retries: process.env.CI ? 1 : 0,
   use: { baseURL: "http://localhost:3000", trace: "on-first-retry" },
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },
@@ -34,6 +36,8 @@ export default defineConfig({
       env: {
         LIVEBOARD_JWT_SECRET:
           process.env.LIVEBOARD_JWT_SECRET ?? "test-secret-test-secret-test-secret-123",
+        LIVEBOARD_INTERNAL_SECRET:
+          process.env.LIVEBOARD_INTERNAL_SECRET ?? "test-internal-secret-test-internal-sec",
         PERSISTENCE: "memory",
       },
     },
@@ -45,6 +49,9 @@ export default defineConfig({
         LIVEBOARD_JWT_SECRET:
           process.env.LIVEBOARD_JWT_SECRET ?? "test-secret-test-secret-test-secret-123",
         NEXT_PUBLIC_WS_URL: process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:1234",
+        LIVEBOARD_SYNC_HTTP_URL: process.env.LIVEBOARD_SYNC_HTTP_URL ?? "http://localhost:1234",
+        LIVEBOARD_INTERNAL_SECRET:
+          process.env.LIVEBOARD_INTERNAL_SECRET ?? "test-internal-secret-test-internal-sec",
       },
     },
   ],

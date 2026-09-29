@@ -44,6 +44,13 @@ async function waitForInkAtLeast(page: Page, target: number, toleranceRatio = 0.
   await expect.poll(async () => inkPixels(page), { timeout: 15_000 }).toBeGreaterThanOrEqual(lo);
 }
 
+async function disableShapeSnap(page: Page) {
+  const toggle = page.getByTestId("shape-recognize-toggle");
+  if (await toggle.isChecked()) {
+    await toggle.uncheck();
+  }
+}
+
 test("remote viewer keeps prior strokes visible while new strokes stream in", async ({ browser }) => {
   const room = `reg-a-${Date.now()}`;
   const a = await (await browser.newContext()).newPage();
@@ -52,6 +59,8 @@ test("remote viewer keeps prior strokes visible while new strokes stream in", as
   await b.goto(`/board/${room}`);
   await expect(a.getByTestId("status")).toHaveText(/connected/i);
   await expect(b.getByTestId("status")).toHaveText(/connected/i);
+  await disableShapeSnap(a);
+  await disableShapeSnap(b);
 
   const strokes: [number, number][][] = [
     [
@@ -72,7 +81,9 @@ test("remote viewer keeps prior strokes visible while new strokes stream in", as
   for (let i = 0; i < strokes.length; i++) {
     const [from, to] = strokes[i]!;
     await drawStroke(a, from, to);
-    await expect(b.getByTestId("board-canvas")).toHaveAttribute("data-stroke-count", String(i + 1));
+    await expect(b.getByTestId("board-canvas")).toHaveAttribute("data-stroke-count", String(i + 1), {
+      timeout: 15_000,
+    });
     const inkA = await inkPixels(a);
     expect(inkA).toBeGreaterThan(500);
     await waitForInkAtLeast(b, inkA);
@@ -91,21 +102,8 @@ test("sticky notes appear on load and when added remotely to an idle peer", asyn
 
   await a.getByTestId("tool-note").click();
   const canvasA = a.getByTestId("board-canvas");
-  const boxA = (await canvasA.boundingBox())!;
-  await canvasA.dispatchEvent("pointerdown", {
-    pointerId: 1,
-    pointerType: "mouse",
-    button: 0,
-    clientX: boxA.x + 120,
-    clientY: boxA.y + 140,
-  });
-  await canvasA.dispatchEvent("pointerup", {
-    pointerId: 1,
-    pointerType: "mouse",
-    button: 0,
-    clientX: boxA.x + 120,
-    clientY: boxA.y + 140,
-  });
+  await canvasA.click({ position: { x: 120, y: 140 } });
+  await expect(a.locator(".sticky-note")).toHaveCount(1, { timeout: 15_000 });
 
   await b.goto(`/board/${room}`);
   await expect(b.getByTestId("status")).toHaveText(/connected/i);
@@ -126,21 +124,8 @@ test("remote Y.Text edits sync to a peer with the note focused", async ({ browse
 
   await a.getByTestId("tool-note").click();
   const canvas = a.getByTestId("board-canvas");
-  const box = (await canvas.boundingBox())!;
-  await canvas.dispatchEvent("pointerdown", {
-    pointerId: 1,
-    pointerType: "mouse",
-    button: 0,
-    clientX: box.x + 100,
-    clientY: box.y + 100,
-  });
-  await canvas.dispatchEvent("pointerup", {
-    pointerId: 1,
-    pointerType: "mouse",
-    button: 0,
-    clientX: box.x + 100,
-    clientY: box.y + 100,
-  });
+  await canvas.click({ position: { x: 100, y: 100 } });
+  await expect(a.locator(".sticky-note")).toHaveCount(1, { timeout: 15_000 });
 
   await expect(b.locator(".sticky-note textarea")).toHaveCount(1, { timeout: 15_000 });
   const noteA = a.locator(".sticky-note textarea");

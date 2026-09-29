@@ -1,19 +1,31 @@
 import * as Y from "yjs";
 import { WebsocketProvider } from "y-websocket";
 import { IndexeddbPersistence } from "y-indexeddb";
-import { type AwarenessState } from "@liveboard/shared";
+import { CloseCode, type AwarenessState, type RoomRole } from "@liveboard/shared";
 import type { Identity } from "./identity";
+import { loadStoredEditCap } from "./share-links";
 import { resolveTerminalClose, terminalCloseAction } from "./terminal-close";
 import { createSyncWatchdog } from "./sync-watchdog";
 
 export type ConnectionStatus =
-  | "offline" //       browser has no network; edits go to IndexedDB only
+  | "offline"
   | "connecting"
   | "connected"
-  | "disconnected" //  lost the socket, y-websocket is backing off and retrying
+  | "disconnected"
   | "room-full"
   | "unauthorized"
-  | "connect-failed"; // couldn't sync after retries (auth/network/proxy)
+  | "connect-failed"
+  | "room-storage-cap";
+
+export class TokenRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+  ) {
+    super(message);
+  }
+}
 
 export interface RoomConnection {
   doc: Y.Doc;
@@ -25,43 +37,76 @@ export interface RoomConnectionOptions {
   roomId: string;
   identity: Identity;
   wsUrl: string;
+  role?: RoomRole;
+  boardPassword?: string | null;
+  editCap?: string;
+  viewCap?: string;
   onStatus: (s: ConnectionStatus) => void;
-  /** Max ms after `open` to wait for first successful sync before retrying. */
+  onRole?: (role: RoomRole) => void;
+  onTokenUserId?: (userId: string) => void;
+  onPasswordRequired?: () => void;
+  onEditAccessDenied?: (message: string) => void;
   syncTimeoutMs?: number;
-  /** Max hung-session / auth refresh attempts before showing connect-failed. */
   maxConnectAttempts?: number;
 }
 
 interface TokenResponse {
   token: string;
   expiresAt: number;
+  role?: RoomRole;
+  userId?: string;
 }
 
 const DEFAULT_SYNC_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_CONNECT_ATTEMPTS = 3;
 
-async function fetchRoomToken(roomId: string, identity: Identity): Promise<TokenResponse> {
+async function fetchRoomToken(
+  roomId: string,
+  identity: Identity,
+  role: RoomRole,
+  password?: string | null,
+  editCap?: string,
+  viewCap?: string,
+): Promise<TokenResponse> {
   const res = await fetch("/api/token", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ room: roomId, userId: identity.id, name: identity.name }),
+    body: JSON.stringify({
+      room: roomId,
+      name: identity.name,
+      role,
+      password: password ?? "",
+      editCap: editCap ?? "",
+      viewCap: viewCap ?? "",
+    }),
   });
-  if (!res.ok) throw new Error(`token request failed: ${res.status}`);
+  if (res.status === 403) {
+    const body = (await res.json().catch(() => ({}))) as { code?: string; error?: string };
+    throw new TokenRequestError(body.error ?? "token forbidden", 403, body.code);
+  }
+  if (!res.ok) throw new TokenRequestError(`token request failed: ${res.status}`, res.status);
   return (await res.json()) as TokenResponse;
 }
 
-/**
- * Wires a Y.Doc to (1) IndexedDB for offline-first persistence and (2) the sync server.
- */
 export function createRoomConnection(opts: RoomConnectionOptions): RoomConnection {
   const {
     roomId,
     identity,
     wsUrl,
+    role = "editor",
+    boardPassword = null,
+    editCap = "",
+    viewCap = "",
     onStatus,
+    onRole,
+    onTokenUserId,
+    onPasswordRequired,
+    onEditAccessDenied,
     syncTimeoutMs = DEFAULT_SYNC_TIMEOUT_MS,
     maxConnectAttempts = DEFAULT_MAX_CONNECT_ATTEMPTS,
   } = opts;
+  let mintRole: RoomRole = role;
+  let editAccessFallbackUsed = false;
   const doc = new Y.Doc();
   const idb = new IndexeddbPersistence(`liveboard:${roomId}`, doc);
   const provider = new WebsocketProvider(wsUrl, roomId, doc, {
@@ -109,9 +154,22 @@ export function createRoomConnection(opts: RoomConnectionOptions): RoomConnectio
 
   async function refreshToken(connectAfter: boolean) {
     try {
-      const { token, expiresAt } = await fetchRoomToken(roomId, identity);
+      const cap = editCap || loadStoredEditCap(roomId);
+      const { token, expiresAt, role: mintedRole, userId } = await fetchRoomToken(
+        roomId,
+        identity,
+        mintRole,
+        boardPassword,
+        cap,
+        viewCap,
+      );
       if (destroyed) return;
       tokenFailures = 0;
+      if (mintedRole) onRole?.(mintedRole);
+      if (userId) {
+        onTokenUserId?.(userId);
+        provider.awareness.setLocalStateField("user", { ...identity, id: userId });
+      }
       provider.params = { token };
       scheduleRefresh(expiresAt);
       if (connectAfter) {
@@ -119,8 +177,27 @@ export function createRoomConnection(opts: RoomConnectionOptions): RoomConnectio
         syncWatchdog.armConnecting();
         provider.connect();
       }
-    } catch {
+    } catch (err) {
       if (destroyed) return;
+      if (err instanceof TokenRequestError && err.status === 403 && err.code === "password") {
+        onPasswordRequired?.();
+        onStatus("unauthorized");
+        return;
+      }
+      if (err instanceof TokenRequestError && err.status === 403) {
+        if (mintRole === "editor" && !editAccessFallbackUsed) {
+          editAccessFallbackUsed = true;
+          mintRole = "viewer";
+          onEditAccessDenied?.("Missing or invalid edit link — connected as viewer.");
+          onRole?.("viewer");
+          void refreshToken(connectAfter);
+          return;
+        }
+        provider.shouldConnect = false;
+        onStatus("unauthorized");
+        onEditAccessDenied?.(err.message);
+        return;
+      }
       onStatus(navigator.onLine ? "disconnected" : "offline");
       const delay = Math.min(30_000, 1000 * 2 ** tokenFailures++);
       clearTimeout(retryTimer);
@@ -149,7 +226,11 @@ export function createRoomConnection(opts: RoomConnectionOptions): RoomConnectio
         provider.connect();
       }, 5_000);
     } else if (action === "room-full") onStatus("room-full");
-    else onStatus("unauthorized");
+    else if (action === "room-storage-cap") {
+      provider.shouldConnect = false;
+      provider.disconnect();
+      onStatus("room-storage-cap");
+    } else onStatus("unauthorized");
   };
 
   provider.on("sync", (synced: boolean) => {
@@ -176,7 +257,7 @@ export function createRoomConnection(opts: RoomConnectionOptions): RoomConnectio
       return;
     }
     if (event.code === 1006 || event.code === 1000) {
-      // Proxy dropped the close frame; retry with a fresh token up to the cap.
+      if (handledTerminalClose) return;
       authRefreshAttempts++;
       if (authRefreshAttempts > maxConnectAttempts) {
         failConnect();
@@ -189,6 +270,12 @@ export function createRoomConnection(opts: RoomConnectionOptions): RoomConnectio
   provider.on("closed", ({ code, reason }) => {
     syncWatchdog.dispose();
     const resolved = resolveTerminalClose(code, reason) ?? code;
+    if (resolved === CloseCode.MessageTooBig || resolved === CloseCode.RoomStorageCap) {
+      handledTerminalClose = true;
+      provider.shouldConnect = false;
+      onStatus("room-storage-cap");
+      return;
+    }
     applyTerminalClose(resolved);
   });
 

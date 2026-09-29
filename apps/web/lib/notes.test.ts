@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { createNote, getNoteText, readNote } from "./notes";
+import { createNote, getNoteText, getNotes, readNote } from "./notes";
 import { LOCAL_ORIGIN } from "./strokes";
 
 describe("notes", () => {
@@ -12,7 +12,7 @@ describe("notes", () => {
 
     const doc2 = new Y.Doc();
     Y.applyUpdate(doc2, Y.encodeStateAsUpdate(doc));
-    const note2 = doc2.getMap("notes").get("n1") as Y.Map<unknown>;
+    const note2 = getNotes(doc2).get("n1") as Y.Map<unknown>;
     const text2 = note2.get("text") as Y.Text;
     doc.transact(() => text.insert(5, " world"), LOCAL_ORIGIN);
     doc2.transact(() => text2.insert(5, " there"), LOCAL_ORIGIN);

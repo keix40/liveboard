@@ -8,6 +8,8 @@ describe("terminal close handling", () => {
     expect(terminalCloseAction(CloseCode.Forbidden)).toBe("unauthorized");
     expect(terminalCloseAction(CloseCode.RateLimited)).toBe("retry-rate-limit");
     expect(terminalCloseAction(CloseCode.RoomFull)).toBe("room-full");
+    expect(terminalCloseAction(CloseCode.RoomStorageCap)).toBe("room-storage-cap");
+    expect(terminalCloseAction(CloseCode.MessageTooBig)).toBe("room-storage-cap");
     expect(terminalCloseAction(1001)).toBeNull();
   });
 

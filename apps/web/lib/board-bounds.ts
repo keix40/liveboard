@@ -2,12 +2,14 @@ import type { Bounds } from "./camera";
 import { readNote, type YNote } from "./notes";
 import { readShape, type YShape } from "./shapes";
 import { readStroke, type YStroke } from "./strokes";
+import { readAsset, type YAsset } from "./assets";
 
 /** Content bounding box for fit-to-screen and export. */
 export function computeContentBounds(
   strokes: YStroke[],
   shapes: Map<string, YShape>,
   notes: Map<string, YNote>,
+  assets?: Map<string, YAsset>,
 ): Bounds | null {
   let minX = Infinity;
   let minY = Infinity;
@@ -31,6 +33,13 @@ export function computeContentBounds(
     const n = readNote(m);
     grow(n.x, n.y);
     grow(n.x + n.w, n.y + n.h);
+  }
+  if (assets) {
+    for (const m of assets.values()) {
+      const a = readAsset(m);
+      grow(a.x, a.y);
+      grow(a.x + a.w, a.y + a.h);
+    }
   }
   if (!Number.isFinite(minX)) return null;
   return { minX, minY, maxX, maxY };

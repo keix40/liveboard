@@ -14,6 +14,7 @@ interface Props {
   size: number;
   zoom: number;
   compact?: boolean;
+  readOnly?: boolean;
   statusChip?: ReactNode;
   onTool(t: DrawTool): void;
   onColor(c: string): void;
@@ -44,6 +45,7 @@ const TOOLS: { id: DrawTool; label: string }[] = [
 ];
 
 export function Toolbar(p: Props) {
+  const ro = p.readOnly === true;
   return (
     <div className={`toolbar-scroll${p.compact ? " compact" : ""}`} data-testid="toolbar-scroll">
       <div className="toolbar" role="toolbar" aria-label="Drawing tools">
@@ -61,6 +63,7 @@ export function Toolbar(p: Props) {
             data-testid={`tool-${t.id}`}
             title={t.id}
             aria-pressed={p.tool === t.id}
+            disabled={ro}
             onClick={() => p.onTool(t.id)}
           >
             {t.label}
@@ -72,6 +75,7 @@ export function Toolbar(p: Props) {
             type="color"
             data-testid="tool-color-picker"
             value={p.color.startsWith("#") && p.color.length >= 7 ? p.color.slice(0, 7) : "#0f172a"}
+            disabled={ro}
             onChange={(e) => p.onColor(e.target.value)}
             aria-label="Pick color"
           />
@@ -85,6 +89,7 @@ export function Toolbar(p: Props) {
             style={{ background: c }}
             aria-label={`Color ${c}`}
             aria-pressed={p.color === c}
+            disabled={ro}
             onClick={() => p.onColor(c)}
           />
         ))}
@@ -96,22 +101,23 @@ export function Toolbar(p: Props) {
             className="tool size-btn"
             data-testid={`size-${s}`}
             aria-pressed={p.size === s}
+            disabled={ro}
             onClick={() => p.onSize(s)}
           >
             {s}
           </button>
         ))}
         <span className="sep" aria-hidden />
-        <button type="button" className="tool" data-testid="tool-undo" onClick={p.onUndo} title="Undo (Ctrl/Cmd+Z)">
+        <button type="button" className="tool" data-testid="tool-undo" disabled={ro} onClick={p.onUndo} title="Undo (Ctrl/Cmd+Z)">
           ↶
         </button>
-        <button type="button" className="tool" data-testid="tool-redo" onClick={p.onRedo} title="Redo (Ctrl/Cmd+Shift+Z)">
+        <button type="button" className="tool" data-testid="tool-redo" disabled={ro} onClick={p.onRedo} title="Redo (Ctrl/Cmd+Shift+Z)">
           ↷
         </button>
-        <button type="button" className="tool" data-testid="tool-delete" onClick={p.onDeleteSelection} title="Delete selection">
+        <button type="button" className="tool" data-testid="tool-delete" disabled={ro} onClick={p.onDeleteSelection} title="Delete selection">
           ⌫
         </button>
-        <button type="button" className="tool" data-testid="tool-clear" onClick={p.onClear} title="Clear board">
+        <button type="button" className="tool" data-testid="tool-clear" disabled={ro} onClick={p.onClear} title="Clear board">
           🗑
         </button>
         <span className="sep" aria-hidden />

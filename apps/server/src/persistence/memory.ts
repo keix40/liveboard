@@ -31,5 +31,9 @@ export class MemoryPersistence implements DocPersistence {
     return this.logs.get(roomId)?.length ?? 0;
   }
 
+  async roomHasContent(roomId: string): Promise<boolean> {
+    return this.snapshots.has(roomId) || (this.logs.get(roomId)?.length ?? 0) > 0;
+  }
+
   async close(): Promise<void> {}
 }

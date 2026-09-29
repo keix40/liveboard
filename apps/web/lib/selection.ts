@@ -4,8 +4,9 @@ import { readStroke, type YStroke } from "./strokes";
 import { isLineLikeKind, lineLikeBounds } from "./shape-geometry";
 import { hitShape, readShape, type YShape } from "./shapes";
 import { hitNote, readNote, type YNote } from "./notes";
+import { hitAsset, readAsset, type YAsset } from "./assets";
 
-export type SelectableKind = "stroke" | "shape" | "note";
+export type SelectableKind = "stroke" | "shape" | "note" | "asset";
 
 export interface SelectableRef {
   kind: SelectableKind;
@@ -18,6 +19,7 @@ export function marqueeSelect(
   shapes: Map<string, YShape> | Iterable<[string, YShape]>,
   notes: Map<string, YNote> | Iterable<[string, YNote]>,
   box: { x1: number; y1: number; x2: number; y2: number },
+  assets?: Map<string, YAsset> | Iterable<[string, YAsset]>,
 ): SelectableRef[] {
   const minX = Math.min(box.x1, box.x2);
   const maxX = Math.max(box.x1, box.x2);
@@ -40,6 +42,12 @@ export function marqueeSelect(
     const n = readNote(m);
     if (n.x + n.w >= minX && n.x <= maxX && n.y + n.h >= minY && n.y <= maxY) hits.push({ kind: "note", id });
   }
+  if (assets) {
+    for (const [id, m] of assets) {
+      const a = readAsset(m);
+      if (a.x + a.w >= minX && a.x <= maxX && a.y + a.h >= minY && a.y <= maxY) hits.push({ kind: "asset", id });
+    }
+  }
   return hits;
 }
 
@@ -49,6 +57,7 @@ export function lassoSelect(
   shapes: Map<string, YShape> | Iterable<[string, YShape]>,
   notes: Map<string, YNote> | Iterable<[string, YNote]>,
   polygon: { x: number; y: number }[],
+  assets?: Map<string, YAsset> | Iterable<[string, YAsset]>,
 ): SelectableRef[] {
   if (polygon.length < 3) return [];
   const hits: SelectableRef[] = [];
@@ -67,6 +76,12 @@ export function lassoSelect(
   for (const [id, m] of notes) {
     const n = readNote(m);
     if (inside(n.x + n.w / 2, n.y + n.h / 2)) hits.push({ kind: "note", id });
+  }
+  if (assets) {
+    for (const [id, m] of assets) {
+      const a = readAsset(m);
+      if (inside(a.x + a.w / 2, a.y + a.h / 2)) hits.push({ kind: "asset", id });
+    }
   }
   return hits;
 }
@@ -90,6 +105,7 @@ export function pickAt(
   notes: Map<string, YNote>,
   wx: number,
   wy: number,
+  assets?: Map<string, YAsset>,
 ): SelectableRef | null {
   for (const [id, m] of [...notes.entries()].reverse()) {
     if (hitNote(readNote(m), wx, wy)) return { kind: "note", id };
@@ -102,6 +118,11 @@ export function pickAt(
     const r = s.size / 2 + 4;
     if (s.points.some(([px, py]) => (px - wx) ** 2 + (py - wy) ** 2 <= r * r)) {
       return { kind: "stroke", id: s.id };
+    }
+  }
+  if (assets) {
+    for (const [id, m] of [...assets.entries()].reverse()) {
+      if (hitAsset(readAsset(m), wx, wy)) return { kind: "asset", id };
     }
   }
   return null;
