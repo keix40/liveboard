@@ -11,9 +11,19 @@ export default defineConfig({
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },
     {
-      name: "mobile",
-      testMatch: /mobile\.spec\.ts/,
+      name: "mobile-chromium",
+      testMatch: /mobile\.spec\.ts|touch-draw\.spec\.ts/,
       use: { ...devices["iPhone 13"], browserName: "chromium" },
+    },
+    {
+      name: "webkit-iphone",
+      testMatch: /toolbar-layout\.spec\.ts|mobile\.spec\.ts/,
+      use: { ...devices["iPhone 13"] },
+    },
+    {
+      name: "webkit-ipad",
+      testMatch: /toolbar-layout\.spec\.ts/,
+      use: { ...devices["iPad Pro 11"] },
     },
   ],
   webServer: [

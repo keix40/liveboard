@@ -60,21 +60,33 @@ export function boundsFromPoints(points: { x: number; y: number }[]): Bounds | n
   return { minX, minY, maxX, maxY };
 }
 
-/** Fit content bounds into viewport with padding (screen px). */
+export interface ViewportInsets {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+}
+
+/** Fit content bounds into the visible viewport (screen px), respecting chrome insets. */
 export function fitBoundsToViewport(
   bounds: Bounds,
   viewportW: number,
   viewportH: number,
   padding = 48,
+  insets: ViewportInsets = { top: 0, bottom: 0, left: 0, right: 0 },
 ): Camera {
+  const innerW = Math.max(1, viewportW - insets.left - insets.right - padding * 2);
+  const innerH = Math.max(1, viewportH - insets.top - insets.bottom - padding * 2);
   const bw = Math.max(1, bounds.maxX - bounds.minX);
   const bh = Math.max(1, bounds.maxY - bounds.minY);
-  const zoom = clampZoom(Math.min((viewportW - padding * 2) / bw, (viewportH - padding * 2) / bh));
+  const zoom = clampZoom(Math.min(innerW / bw, innerH / bh));
   const cx = (bounds.minX + bounds.maxX) / 2;
   const cy = (bounds.minY + bounds.maxY) / 2;
+  const visibleCx = insets.left + (viewportW - insets.left - insets.right) / 2;
+  const visibleCy = insets.top + (viewportH - insets.top - insets.bottom) / 2;
   return {
     zoom,
-    x: viewportW / 2 - cx * zoom,
-    y: viewportH / 2 - cy * zoom,
+    x: visibleCx - cx * zoom,
+    y: visibleCy - cy * zoom,
   };
 }

@@ -1,13 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
 import type { Point, ShapeKind } from "@liveboard/shared";
 import { useRoom } from "@/lib/useRoom";
 import {
   beginStroke,
   deleteStrokeById,
-  eraseAt,
   getStrokes,
   LOCAL_ORIGIN,
   readStroke,
@@ -23,10 +22,17 @@ import {
   zoomAt,
   type Camera,
 } from "@/lib/camera";
-import { coalescedPointerPoints, pinchMetrics, shouldDrawWithPointer } from "@/lib/pointer-input";
+import { coalescedPointerPoints, pinchMetrics } from "@/lib/pointer-input";
+import { eraseAtWorld } from "@/lib/board-erase";
+import {
+  createPenSessionState,
+  onPenPointerDown,
+  onPenPointerUp,
+  shouldIgnoreTouchPointer,
+} from "@/lib/pointer-session";
 import { renderBoard } from "@/lib/render-board";
-import { getShapes, hitShape, readShape, upsertShape, deleteShape } from "@/lib/shapes";
-import { createNote, deleteNote, getNotes, hitNote, readNote } from "@/lib/notes";
+import { getShapes, upsertShape, deleteShape } from "@/lib/shapes";
+import { createNote, deleteNote, getNotes } from "@/lib/notes";
 import { lassoSelect, pickAt, type SelectableRef } from "@/lib/selection";
 import { computeContentBounds } from "@/lib/board-bounds";
 import { exportBoardPdf, exportBoardPng } from "@/lib/export-board";
@@ -43,6 +49,11 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 const SHAPE_TOOLS = new Set<DrawTool>(["rect", "ellipse", "line", "arrow"]);
+function isPanGesture(tool: DrawTool, pointerType: string, touchCount: number): boolean {
+  if (tool === "pan") return true;
+  if (pointerType === "touch" && touchCount >= 2) return true;
+  return false;
+}
 
 export function Whiteboard({ roomId }: { roomId: string }) {
   const { conn, identity, status, peers } = useRoom(roomId);
@@ -51,7 +62,10 @@ export function Whiteboard({ roomId }: { roomId: string }) {
   const pointBatcher = useRef<StrokePointBatcher | null>(null);
   const rafRef = useRef(0);
   const cursorRaf = useRef(0);
-  const penActiveRef = useRef(false);
+  const penSessionRef = useRef(createPenSessionState());
+  const strokePointerIdRef = useRef<number | null>(null);
+  const gesturePointerIdRef = useRef<number | null>(null);
+  const chromeRef = useRef<HTMLElement>(null);
   const pointersRef = useRef(new Map<number, { x: number; y: number; type: string }>());
   const pinchRef = useRef<{ distance: number; zoom: number } | null>(null);
   const panRef = useRef<{ lastX: number; lastY: number } | null>(null);
@@ -66,6 +80,8 @@ export function Whiteboard({ roomId }: { roomId: string }) {
   const [camera, setCamera] = useState<Camera>(DEFAULT_CAMERA);
   const [selection, setSelection] = useState<SelectableRef[]>([]);
   const [lassoPath, setLassoPath] = useState<{ x: number; y: number }[]>([]);
+  const [chromeHeight, setChromeHeight] = useState(120);
+  const [compactToolbar, setCompactToolbar] = useState(false);
   const [previewShape, setPreviewShape] = useState<{
     kind: string;
     x: number;
@@ -85,10 +101,31 @@ export function Whiteboard({ roomId }: { roomId: string }) {
     if (!doc || !strokes || !shapesMap || !notesMap) return null;
     return new Y.UndoManager([strokes, shapesMap, notesMap], {
       trackedOrigins: new Set([LOCAL_ORIGIN]),
-      captureTimeout: 60_000,
+      captureTimeout: 300,
     });
   }, [doc, strokes, shapesMap, notesMap]);
   useEffect(() => () => undo?.destroy(), [undo]);
+
+  const beginAction = useCallback(() => {
+    undo?.stopCapturing();
+  }, [undo]);
+
+  useLayoutEffect(() => {
+    const el = chromeRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setChromeHeight(el.getBoundingClientRect().height));
+    ro.observe(el);
+    setChromeHeight(el.getBoundingClientRect().height);
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 820px)");
+    const apply = () => setCompactToolbar(mq.matches);
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, []);
 
   const collectShapes = useCallback(() => {
     const m = new Map<string, Y.Map<unknown>>();
@@ -198,38 +235,44 @@ export function Whiteboard({ roomId }: { roomId: string }) {
     const sx = e.clientX - r.left;
     const sy = e.clientY - r.top;
     const world = screenToWorld(camera, sx, sy);
+    const session = penSessionRef.current;
 
     pointersRef.current.set(e.pointerId, { x: sx, y: sy, type: e.pointerType });
-    if (e.pointerType === "pen") penActiveRef.current = true;
+    if (e.pointerType === "pen") onPenPointerDown(session);
 
-    const touchCount = [...pointersRef.current.values()].filter((p) => p.type === "touch").length;
-    if (touchCount >= 2) {
-      const touches = [...pointersRef.current.values()].filter((p) => p.type === "touch");
-      if (touches.length >= 2) {
-        const m = pinchMetrics(touches[0]!, touches[1]!);
-        pinchRef.current = { distance: m.distance, zoom: camera.zoom };
-        panRef.current = null;
-        drawing.current = null;
-        return;
-      }
-    }
+    if (shouldIgnoreTouchPointer(e.pointerType, session)) return;
 
-    if (e.pointerType === "touch" && touchCount === 1 && tool !== "select" && !SHAPE_TOOLS.has(tool)) {
-      panRef.current = { lastX: sx, lastY: sy };
+    const touchPointers = [...pointersRef.current.entries()].filter(([, p]) => p.type === "touch");
+    const touchCount = touchPointers.length;
+
+    if (touchCount >= 2 && !session.penDown) {
+      const touches = touchPointers.map(([, p]) => p);
+      const m = pinchMetrics(touches[0]!, touches[1]!);
+      pinchRef.current = { distance: m.distance, zoom: camera.zoom };
+      panRef.current = null;
       return;
     }
 
-    if (!shouldDrawWithPointer(e.pointerType, penActiveRef.current)) return;
+    if (isPanGesture(tool, e.pointerType, touchCount)) {
+      panRef.current = { lastX: sx, lastY: sy };
+      gesturePointerIdRef.current = e.pointerId;
+      canvas.setPointerCapture(e.pointerId);
+      return;
+    }
 
     canvas.setPointerCapture(e.pointerId);
+    gesturePointerIdRef.current = e.pointerId;
 
     if (tool === "select") {
+      beginAction();
       const hit = pickAt(strokes!.toArray(), collectShapes(), collectNotes(), world.x, world.y);
       if (hit && e.shiftKey) {
         setSelection((sel) => (sel.some((s) => s.id === hit.id) ? sel.filter((s) => s.id !== hit.id) : [...sel, hit]));
       } else if (hit) {
-        setSelection([hit]);
-        dragSelectionRef.current = { startX: world.x, startY: world.y, snapshot: [hit] };
+        const inSel = selection.some((s) => s.id === hit.id && s.kind === hit.kind);
+        const nextSel = inSel && selection.length > 0 ? selection : [hit];
+        setSelection(nextSel);
+        dragSelectionRef.current = { startX: world.x, startY: world.y, snapshot: [...nextSel] };
       } else {
         setSelection([]);
         lassoRef.current = [world];
@@ -239,14 +282,15 @@ export function Whiteboard({ roomId }: { roomId: string }) {
     }
 
     if (tool === "eraser") {
-      eraseAt(doc, world.x, world.y, size);
-      eraseShapesAndNotes(doc, world.x, world.y, size);
+      beginAction();
+      eraseAtWorld(doc, world.x, world.y, size);
       drawing.current = new Y.Array();
+      strokePointerIdRef.current = e.pointerId;
       return;
     }
 
     if (tool === "note") {
-      undo?.stopCapturing();
+      beginAction();
       createNote(doc, {
         id: crypto.randomUUID(),
         authorId: identity.id,
@@ -259,7 +303,7 @@ export function Whiteboard({ roomId }: { roomId: string }) {
     }
 
     if (tool === "text") {
-      undo?.stopCapturing();
+      beginAction();
       const text = prompt("Enter text") ?? "Text";
       upsertShape(doc, {
         id: crypto.randomUUID(),
@@ -281,6 +325,7 @@ export function Whiteboard({ roomId }: { roomId: string }) {
     }
 
     if (SHAPE_TOOLS.has(tool)) {
+      beginAction();
       shapeStartRef.current = { x: world.x, y: world.y };
       setPreviewShape({
         kind: tool,
@@ -295,7 +340,7 @@ export function Whiteboard({ roomId }: { roomId: string }) {
     }
 
     if (tool === "pen" || tool === "highlighter") {
-      undo?.stopCapturing();
+      beginAction();
       const points = beginStroke(doc, {
         id: crypto.randomUUID(),
         authorId: identity.id,
@@ -305,6 +350,7 @@ export function Whiteboard({ roomId }: { roomId: string }) {
         first: [world.x, world.y, e.pressure || 0.5],
       });
       drawing.current = points;
+      strokePointerIdRef.current = e.pointerId;
       pointBatcher.current?.dispose();
       pointBatcher.current = new StrokePointBatcher(doc, points);
     }
@@ -323,15 +369,19 @@ export function Whiteboard({ roomId }: { roomId: string }) {
 
     setCursorWorld({ x: world.x, y: world.y });
 
-    const touches = [...pointersRef.current.values()].filter((p) => p.type === "touch");
-    if (touches.length >= 2 && pinchRef.current) {
+    const session = penSessionRef.current;
+    if (shouldIgnoreTouchPointer(e.pointerType, session)) return;
+
+    const touchPointers = [...pointersRef.current.entries()].filter(([, p]) => p.type === "touch");
+    if (touchPointers.length >= 2 && pinchRef.current && !session.penDown) {
+      const touches = touchPointers.map(([, p]) => p);
       const m = pinchMetrics(touches[0]!, touches[1]!);
       const scale = m.distance / pinchRef.current.distance;
       setCamera((cam) => zoomAt(cam, pinchRef.current!.zoom * scale, m.midX, m.midY));
       return;
     }
 
-    if (panRef.current && e.pointerType === "touch") {
+    if (panRef.current && e.pointerId === gesturePointerIdRef.current) {
       const dx = sx - panRef.current.lastX;
       const dy = sy - panRef.current.lastY;
       panRef.current = { lastX: sx, lastY: sy };
@@ -369,8 +419,8 @@ export function Whiteboard({ roomId }: { roomId: string }) {
       return;
     }
 
+    if (e.pointerId !== strokePointerIdRef.current) return;
     if (!drawing.current) return;
-    if (!shouldDrawWithPointer(e.pointerType, penActiveRef.current)) return;
 
     const toLocal = (cx: number, cy: number) => {
       const w = screenToWorld(camera, cx - r.left, cy - r.top);
@@ -381,61 +431,68 @@ export function Whiteboard({ roomId }: { roomId: string }) {
     );
 
     if (tool === "eraser") {
-      for (const p of pts) {
-        eraseAt(doc, p[0], p[1], size);
-        eraseShapesAndNotes(doc, p[0], p[1], size);
-      }
+      for (const p of pts) eraseAtWorld(doc, p[0], p[1], size);
     } else {
       for (const p of pts) pointBatcher.current?.push(p);
     }
   };
 
   const finishPointer = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    pointersRef.current.delete(e.pointerId);
+    const pointerId = e.pointerId;
+    const wasGesture = pointerId === gesturePointerIdRef.current;
+    const wasStroke = pointerId === strokePointerIdRef.current;
+
+    pointersRef.current.delete(pointerId);
     if (e.pointerType === "pen" && ![...pointersRef.current.values()].some((p) => p.type === "pen")) {
-      penActiveRef.current = false;
+      onPenPointerUp(penSessionRef.current);
     }
     if (pointersRef.current.size < 2) pinchRef.current = null;
-    if (pointersRef.current.size === 0) panRef.current = null;
 
     releaseCapture(e);
 
-    if (tool === "select" && lassoRef.current.length > 2 && strokes && shapesMap && notesMap) {
-      const picked = lassoSelect(strokes.toArray(), collectShapes(), collectNotes(), lassoRef.current);
-      setSelection(picked);
-    }
-    lassoRef.current = [];
-    setLassoPath([]);
-    dragSelectionRef.current = null;
+    if (wasGesture) {
+      panRef.current = null;
+      gesturePointerIdRef.current = null;
 
-    if (shapeStartRef.current && previewShape && doc && identity) {
-      const kind = previewShape.kind as ShapeKind;
-      if (previewShape.w > 2 || previewShape.h > 2) {
-        undo?.stopCapturing();
-        upsertShape(doc, {
-          id: crypto.randomUUID(),
-          kind,
-          x: previewShape.x,
-          y: previewShape.y,
-          w: previewShape.w,
-          h: previewShape.h,
-          rotation: 0,
-          stroke: previewShape.stroke,
-          fill: kind === "rect" || kind === "ellipse" ? `${previewShape.stroke}22` : null,
-          strokeWidth: previewShape.strokeWidth,
-          z: nextZ(),
-          authorId: identity.id,
-          createdAt: Date.now(),
-        });
+      if (tool === "select" && lassoRef.current.length > 2 && strokes && shapesMap && notesMap) {
+        const picked = lassoSelect(strokes.toArray(), collectShapes(), collectNotes(), lassoRef.current);
+        setSelection(picked);
+      }
+      lassoRef.current = [];
+      setLassoPath([]);
+      dragSelectionRef.current = null;
+
+      if (shapeStartRef.current && previewShape && doc && identity) {
+        const kind = previewShape.kind as ShapeKind;
+        if (previewShape.w > 2 || previewShape.h > 2) {
+          upsertShape(doc, {
+            id: crypto.randomUUID(),
+            kind,
+            x: previewShape.x,
+            y: previewShape.y,
+            w: previewShape.w,
+            h: previewShape.h,
+            rotation: 0,
+            stroke: previewShape.stroke,
+            fill: kind === "rect" || kind === "ellipse" ? `${previewShape.stroke}22` : null,
+            strokeWidth: previewShape.strokeWidth,
+            z: nextZ(),
+            authorId: identity.id,
+            createdAt: Date.now(),
+          });
+        }
+        shapeStartRef.current = null;
+        setPreviewShape(null);
       }
     }
-    shapeStartRef.current = null;
-    setPreviewShape(null);
 
-    pointBatcher.current?.flush();
-    pointBatcher.current?.dispose();
-    pointBatcher.current = null;
-    drawing.current = null;
+    if (wasStroke) {
+      pointBatcher.current?.flush();
+      pointBatcher.current?.dispose();
+      pointBatcher.current = null;
+      drawing.current = null;
+      strokePointerIdRef.current = null;
+    }
   };
 
   useEffect(() => {
@@ -471,7 +528,7 @@ export function Whiteboard({ roomId }: { roomId: string }) {
   const clear = () => {
     if (!doc || !strokes) return;
     if (!confirm("Clear the board for everyone? (Undo restores it)")) return;
-    undo?.stopCapturing();
+    beginAction();
     doc.transact(() => {
       strokes.delete(0, strokes.length);
       shapesMap?.forEach((_, k) => shapesMap.delete(k));
@@ -482,7 +539,7 @@ export function Whiteboard({ roomId }: { roomId: string }) {
 
   const deleteSelection = () => {
     if (!doc || selection.length === 0) return;
-    undo?.stopCapturing();
+    beginAction();
     doc.transact(() => {
       for (const sel of selection) {
         if (sel.kind === "stroke") deleteStrokeById(doc, sel.id);
@@ -498,7 +555,12 @@ export function Whiteboard({ roomId }: { roomId: string }) {
     const bounds = computeContentBounds(strokes.toArray(), collectShapes(), collectNotes());
     if (!bounds) return;
     setCamera(
-      fitBoundsToViewport(bounds, canvasRef.current.clientWidth, canvasRef.current.clientHeight),
+      fitBoundsToViewport(bounds, canvasRef.current.clientWidth, canvasRef.current.clientHeight, 48, {
+        top: chromeHeight,
+        bottom: 0,
+        left: 0,
+        right: 0,
+      }),
     );
   };
 
@@ -522,97 +584,89 @@ export function Whiteboard({ roomId }: { roomId: string }) {
 
   const everyone = identity ? [{ clientId: -1, user: identity }, ...peers] : peers;
 
+  const cursorStyle =
+    tool === "eraser" ? "cell" : tool === "pan" ? "grab" : tool === "select" ? "default" : "crosshair";
+
   return (
     <div className="board">
-      <canvas
-        ref={canvasRef}
-        data-testid="board-canvas"
-        data-stroke-count={strokes?.length ?? 0}
-        style={{
-          cursor: tool === "eraser" ? "cell" : tool === "select" ? "default" : "crosshair",
-          touchAction: "none",
-        }}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={finishPointer}
-        onPointerCancel={finishPointer}
-        onPointerLeave={() => setCursorWorld(null)}
-      />
-      {doc ? (
-        <NoteLayer
-          doc={doc}
-          camera={camera}
-          notes={collectNotes()}
-          selectedIds={new Set(selection.filter((s) => s.kind === "note").map((s) => s.id))}
-          onSelect={(id) => setSelection([{ kind: "note", id }])}
-        />
-      ) : null}
-      <Cursors peers={peers} camera={camera} />
-      <Toolbar
-        tool={tool}
-        color={color}
-        size={size}
-        zoom={camera.zoom}
-        onTool={setTool}
-        onColor={setColor}
-        onSize={setSize}
-        onUndo={() => undo?.undo()}
-        onRedo={() => undo?.redo()}
-        onClear={clear}
-        onZoomIn={() =>
-          setCamera((cam) =>
-            zoomAt(cam, cam.zoom * 1.2, canvasRef.current!.clientWidth / 2, canvasRef.current!.clientHeight / 2),
-          )
-        }
-        onZoomOut={() =>
-          setCamera((cam) =>
-            zoomAt(cam, cam.zoom / 1.2, canvasRef.current!.clientWidth / 2, canvasRef.current!.clientHeight / 2),
-          )
-        }
-        onFit={fitToScreen}
-        onExportPng={() => {
-          const ex = exportOpts();
-          if (ex) void exportBoardPng(`liveboard-${roomId}.png`, ex.bounds, ex.renderOpts);
-        }}
-        onExportPdf={() => {
-          const ex = exportOpts();
-          if (ex) void exportBoardPdf(`liveboard-${roomId}.pdf`, ex.bounds, ex.renderOpts);
-        }}
-        onDeleteSelection={deleteSelection}
-      />
-      <div className="hud">
-        <span className={`pill status-${status}`} data-testid="status">
-          {STATUS_LABEL[status] ?? status}
-        </span>
-        <span className="pill" data-testid="presence">
-          {everyone.length} online
-        </span>
-        <div className="avatars">
-          {everyone.slice(0, 6).map((p) => (
-            <span key={p.clientId} className="avatar" style={{ background: p.user.color }} title={p.user.name}>
-              {p.user.name.slice(0, 1)}
-            </span>
-          ))}
+      <header className="board-chrome" ref={chromeRef} data-testid="board-chrome">
+        <div className="board-hud hud">
+          <span className={`pill status-${status}`} data-testid="status">
+            {STATUS_LABEL[status] ?? status}
+          </span>
+          <span className="pill" data-testid="presence">
+            {everyone.length} online
+          </span>
+          <div className="avatars">
+            {everyone.slice(0, 6).map((p) => (
+              <span key={p.clientId} className="avatar" style={{ background: p.user.color }} title={p.user.name}>
+                {p.user.name.slice(0, 1)}
+              </span>
+            ))}
+          </div>
+          <button type="button" className="pill" data-testid="copy-link" onClick={() => void navigator.clipboard.writeText(window.location.href)}>
+            🔗 Copy link
+          </button>
         </div>
-        <button className="pill" onClick={() => void navigator.clipboard.writeText(window.location.href)}>
-          🔗 Copy link
-        </button>
+        <Toolbar
+          tool={tool}
+          color={color}
+          size={size}
+          zoom={camera.zoom}
+          compact={compactToolbar}
+          onTool={setTool}
+          onColor={setColor}
+          onSize={setSize}
+          onUndo={() => undo?.undo()}
+          onRedo={() => undo?.redo()}
+          onClear={clear}
+          onZoomIn={() =>
+            setCamera((cam) =>
+              zoomAt(cam, cam.zoom * 1.2, canvasRef.current!.clientWidth / 2, canvasRef.current!.clientHeight / 2),
+            )
+          }
+          onZoomOut={() =>
+            setCamera((cam) =>
+              zoomAt(cam, cam.zoom / 1.2, canvasRef.current!.clientWidth / 2, canvasRef.current!.clientHeight / 2),
+            )
+          }
+          onFit={fitToScreen}
+          onExportPng={() => {
+            const ex = exportOpts();
+            if (ex) void exportBoardPng(`liveboard-${roomId}.png`, ex.bounds, ex.renderOpts);
+          }}
+          onExportPdf={() => {
+            const ex = exportOpts();
+            if (ex) void exportBoardPdf(`liveboard-${roomId}.pdf`, ex.bounds, ex.renderOpts);
+          }}
+          onDeleteSelection={deleteSelection}
+        />
+      </header>
+      <div className="board-surface">
+        <canvas
+          ref={canvasRef}
+          data-testid="board-canvas"
+          data-stroke-count={strokes?.length ?? 0}
+          style={{ cursor: cursorStyle, touchAction: "none" }}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={finishPointer}
+          onPointerCancel={finishPointer}
+          onPointerLeave={() => setCursorWorld(null)}
+        />
+        {doc ? (
+          <NoteLayer
+            doc={doc}
+            camera={camera}
+            notes={collectNotes()}
+            selectedIds={new Set(selection.filter((s) => s.kind === "note").map((s) => s.id))}
+            onSelect={(id) => setSelection([{ kind: "note", id }])}
+          />
+        ) : null}
+        <Cursors peers={peers} camera={camera} />
       </div>
     </div>
   );
-}
-
-function eraseShapesAndNotes(doc: Y.Doc, x: number, y: number, radius: number): void {
-  const shapes = getShapes(doc);
-  const notes = getNotes(doc);
-  doc.transact(() => {
-    shapes.forEach((m, id) => {
-      if (hitShape(readShape(m), x, y, radius)) shapes.delete(id);
-    });
-    notes.forEach((m, id) => {
-      if (hitNote(readNote(m), x, y)) notes.delete(id);
-    });
-  }, LOCAL_ORIGIN);
 }
 
 function moveSelection(doc: Y.Doc, selection: SelectableRef[], dx: number, dy: number): void {
