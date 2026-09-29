@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { beginStroke, getStrokes, LOCAL_ORIGIN } from "./strokes";
+import { beginStroke, LOCAL_ORIGIN } from "./strokes";
+import { writeStrokes, writeShapes } from "./page-model";
 import { eraseAtWorld } from "./board-erase";
-import { upsertShape, getShapes } from "./shapes";
+import { upsertShape } from "./shapes";
 
 describe("undo stack", () => {
   it("undo after erasing one stroke restores both strokes", () => {
     const doc = new Y.Doc();
-    const strokes = getStrokes(doc);
+    const strokes = writeStrokes(doc);
     const undo = new Y.UndoManager(strokes, {
       trackedOrigins: new Set([LOCAL_ORIGIN]),
       captureTimeout: 300,
@@ -29,7 +30,7 @@ describe("undo stack", () => {
 
   it("undoing shape creation removes the map entry entirely", () => {
     const doc = new Y.Doc();
-    const shapes = getShapes(doc);
+    const shapes = writeShapes(doc);
     const undo = new Y.UndoManager(shapes, { trackedOrigins: new Set([LOCAL_ORIGIN]), captureTimeout: 300 });
     undo.stopCapturing();
     upsertShape(doc, {

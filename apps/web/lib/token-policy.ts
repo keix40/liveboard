@@ -21,7 +21,13 @@ export function evaluateTokenAccess(params: {
   const legacyOpen = record === null;
 
   if (requestedRole === "viewer") {
-    if (viewCap && !verifyCapability(room, jwtSecret, viewCap, "view")) {
+    if (!legacyOpen) {
+      const viewOk = Boolean(viewCap && verifyCapability(room, jwtSecret, viewCap, "view"));
+      const editOk = Boolean(record && editCap && verifyEditCapability(editCap, record.editCapHash));
+      if (!viewOk && !editOk) {
+        return { ok: false, error: "view or edit capability required" };
+      }
+    } else if (viewCap && !verifyCapability(room, jwtSecret, viewCap, "view")) {
       return { ok: false, error: "invalid view capability" };
     }
     return { ok: true, role: "viewer", legacyOpen };

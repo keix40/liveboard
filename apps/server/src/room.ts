@@ -11,7 +11,12 @@ import type { Logger } from "./logger.js";
 import { PerTurnTokenBucket, TokenBucket } from "./rate-limit.js";
 import { forceCloseWebSocket } from "./ws-close.js";
 import { encodeAwareness, encodeSyncStep1, encodeUpdate } from "./protocol.js";
-import { incomingUpdateAllowed, rebaseRoomStorage, type RoomStorageState } from "./room-storage.js";
+import {
+  incomingUpdateAllowed,
+  rebaseRoomStorage,
+  recordAppliedUpdate,
+  type RoomStorageState,
+} from "./room-storage.js";
 
 /** Transaction origins that must NOT be re-persisted / re-published. */
 export const PERSISTENCE_ORIGIN = Symbol("persistence");
@@ -44,7 +49,7 @@ type AwarenessChange = { added: number[]; updated: number[]; removed: number[] }
 
 /**
  * One collaborative board: a Y.Doc + awareness + the sockets connected to it on this instance.
- * Write policy: JWT role (editors only) + O(1) room byte budget. No lock/shadow trial on server.
+ * Write policy: JWT role (editors only) + room byte budget (delta tracking, rebase on compaction).
  */
 export class Room {
   readonly doc = new Y.Doc({ gc: true });
@@ -163,7 +168,6 @@ export class Room {
           client.syncComplete = true;
           break;
         }
-        rebaseRoomStorage(this.storage, this.doc);
         const gate = incomingUpdateAllowed(this.storage, update.byteLength);
         if (!gate.ok) {
           this.deps.log.warn("dropped update", { roomId: this.id, reason: gate.reason, bytes: update.byteLength });
@@ -172,7 +176,7 @@ export class Room {
           return;
         }
         Y.applyUpdate(this.doc, update, client.ws);
-        rebaseRoomStorage(this.storage, this.doc);
+        recordAppliedUpdate(this.storage, update.byteLength);
         break;
       }
       default:
@@ -243,7 +247,7 @@ export class Room {
     try {
       if (msg.kind === "update") {
         Y.applyUpdate(this.doc, msg.data, REMOTE_ORIGIN);
-        rebaseRoomStorage(this.storage, this.doc);
+        recordAppliedUpdate(this.storage, msg.data.byteLength);
       } else awarenessProtocol.applyAwarenessUpdate(this.awareness, msg.data, REMOTE_ORIGIN);
     } catch (err) {
       this.deps.log.warn("bad remote message", { roomId: this.id, err: (err as Error).message });

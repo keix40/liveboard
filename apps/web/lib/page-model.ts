@@ -1,118 +1,79 @@
 import * as Y from "yjs";
-import { YKEYS } from "@liveboard/shared";
+import {
+  YKEYS,
+  DEFAULT_PAGE_ID,
+  pageContentKey,
+} from "@liveboard/shared";
 import { readBoardMeta } from "./board-meta";
-import { LOCAL_ORIGIN } from "./strokes";
 
-export type PageContentMaps = {
-  strokes: Y.Array<Y.Map<unknown>>;
-  shapes: Y.Map<Y.Map<unknown>>;
-  notes: Y.Map<Y.Map<unknown>>;
-  assets: Y.Map<Y.Map<unknown>>;
-};
-
-function legacyHasContent(doc: Y.Doc): boolean {
-  return (
-    doc.getArray(YKEYS.strokes).length > 0 ||
-    doc.getMap(YKEYS.shapes).size > 0 ||
-    doc.getMap(YKEYS.notes).size > 0 ||
-    doc.getMap(YKEYS.assets).size > 0
-  );
-}
-
-function cloneStrokeRow(row: Y.Map<unknown>): Y.Map<unknown> {
-  const stroke = new Y.Map<unknown>();
-  row.forEach((v, k) => {
-    if (k === "points" && v instanceof Y.Array) {
-      const pts = new Y.Array<number>();
-      pts.push(v.toArray() as number[]);
-      stroke.set(k, pts);
-    } else stroke.set(k, v);
-  });
-  return stroke;
-}
-
-function cloneEntityMap(source: Y.Map<Y.Map<unknown>>): Y.Map<Y.Map<unknown>> {
-  const out = new Y.Map<Y.Map<unknown>>();
-  source.forEach((row, id) => {
-    const m = new Y.Map<unknown>();
-    row.forEach((v, k) => {
-      if (k === "text" && v instanceof Y.Text) m.set(k, new Y.Text(v.toString()));
-      else m.set(k, v);
-    });
-    out.set(id, m);
-  });
-  return out;
-}
-
-function emptyPageContent(): PageContentMaps {
-  return {
-    strokes: new Y.Array(),
-    shapes: new Y.Map(),
-    notes: new Y.Map(),
-    assets: new Y.Map(),
-  };
-}
-
-function attachPageContent(page: Y.Map<unknown>, content: PageContentMaps): void {
-  page.set("strokes", content.strokes);
-  page.set("shapes", content.shapes);
-  page.set("notes", content.notes);
-  page.set("assets", content.assets);
-}
-
-/** Migrate legacy top-level strokes/shapes/notes/assets into pages.page-1. Idempotent. */
-export function ensurePageModel(doc: Y.Doc): void {
-  const pages = doc.getMap(YKEYS.pages);
-  if (pages.size > 0) return;
-  if (!legacyHasContent(doc)) return;
-
-  doc.transact(() => {
-    const content = emptyPageContent();
-    if (legacyHasContent(doc)) {
-      const legacyStrokes = doc.getArray(YKEYS.strokes);
-      for (let i = 0; i < legacyStrokes.length; i++) {
-        const row = legacyStrokes.get(i);
-        if (row instanceof Y.Map) content.strokes.push([cloneStrokeRow(row)]);
-      }
-      content.shapes = cloneEntityMap(doc.getMap(YKEYS.shapes) as Y.Map<Y.Map<unknown>>);
-      content.notes = cloneEntityMap(doc.getMap(YKEYS.notes) as Y.Map<Y.Map<unknown>>);
-      content.assets = cloneEntityMap(doc.getMap(YKEYS.assets) as Y.Map<Y.Map<unknown>>);
-      legacyStrokes.delete(0, legacyStrokes.length);
-      doc.getMap(YKEYS.shapes).forEach((_, k) => doc.getMap(YKEYS.shapes).delete(k));
-      doc.getMap(YKEYS.notes).forEach((_, k) => doc.getMap(YKEYS.notes).delete(k));
-      doc.getMap(YKEYS.assets).forEach((_, k) => doc.getMap(YKEYS.assets).delete(k));
-    }
-    const page = new Y.Map<unknown>();
-    attachPageContent(page, content);
-    pages.set("page-1", page);
-  }, LOCAL_ORIGIN);
-}
-
-export function ensurePage(doc: Y.Doc, pageId: string): PageContentMaps {
-  ensurePageModel(doc);
-  const pages = doc.getMap(YKEYS.pages);
-  let raw = pages.get(pageId);
-  if (!(raw instanceof Y.Map)) {
-    const page = new Y.Map<unknown>();
-    attachPageContent(page, emptyPageContent());
-    pages.set(pageId, page);
-    raw = page;
-  }
-  const page = raw as Y.Map<unknown>;
-  return {
-    strokes: page.get("strokes") as Y.Array<Y.Map<unknown>>,
-    shapes: page.get("shapes") as Y.Map<Y.Map<unknown>>,
-    notes: page.get("notes") as Y.Map<Y.Map<unknown>>,
-    assets: page.get("assets") as Y.Map<Y.Map<unknown>>,
-  };
-}
+/** Read-only placeholders — never attached to a Y.Doc. */
+const EMPTY_STROKES = new Y.Array<Y.Map<unknown>>();
+const EMPTY_ENTITY_MAP = new Y.Map<Y.Map<unknown>>();
 
 export function resolvePageId(doc: Y.Doc, pageId?: string): string {
   if (pageId) return pageId;
   const meta = readBoardMeta(doc);
-  return meta?.activePageId ?? "page-1";
+  return meta?.activePageId ?? DEFAULT_PAGE_ID;
 }
 
-export function getPageContent(doc: Y.Doc, pageId?: string): PageContentMaps {
-  return ensurePage(doc, resolvePageId(doc, pageId));
+function peekArray(doc: Y.Doc, key: string): Y.Array<Y.Map<unknown>> {
+  if (!doc.share.has(key)) return EMPTY_STROKES;
+  return doc.getArray(key);
+}
+
+function peekMap(doc: Y.Doc, key: string): Y.Map<Y.Map<unknown>> {
+  if (!doc.share.has(key)) return EMPTY_ENTITY_MAP;
+  return doc.getMap(key);
+}
+
+export function readStrokes(doc: Y.Doc, pageId?: string): Y.Array<Y.Map<unknown>> {
+  return peekArray(doc, pageContentKey("strokes", resolvePageId(doc, pageId)));
+}
+
+export function readShapes(doc: Y.Doc, pageId?: string): Y.Map<Y.Map<unknown>> {
+  return peekMap(doc, pageContentKey("shapes", resolvePageId(doc, pageId)));
+}
+
+export function readNotes(doc: Y.Doc, pageId?: string): Y.Map<Y.Map<unknown>> {
+  return peekMap(doc, pageContentKey("notes", resolvePageId(doc, pageId)));
+}
+
+export function readAssets(doc: Y.Doc, pageId?: string): Y.Map<Y.Map<unknown>> {
+  return peekMap(doc, pageContentKey("assets", resolvePageId(doc, pageId)));
+}
+
+export function writeStrokes(doc: Y.Doc, pageId?: string): Y.Array<Y.Map<unknown>> {
+  return doc.getArray(pageContentKey("strokes", resolvePageId(doc, pageId)));
+}
+
+export function writeShapes(doc: Y.Doc, pageId?: string): Y.Map<Y.Map<unknown>> {
+  return doc.getMap(pageContentKey("shapes", resolvePageId(doc, pageId)));
+}
+
+export function writeNotes(doc: Y.Doc, pageId?: string): Y.Map<Y.Map<unknown>> {
+  return doc.getMap(pageContentKey("notes", resolvePageId(doc, pageId)));
+}
+
+export function writeAssets(doc: Y.Doc, pageId?: string): Y.Map<Y.Map<unknown>> {
+  return doc.getMap(pageContentKey("assets", resolvePageId(doc, pageId)));
+}
+
+/** Page metadata only — call when the user adds a page (not on read). */
+export function isBoundToDoc(doc: Y.Doc, type: Y.AbstractType<unknown> | null | undefined): type is Y.AbstractType<unknown> {
+  return type != null && type.doc === doc;
+}
+
+export function readStrokeCount(doc: Y.Doc, pageId?: string): number {
+  const key = pageContentKey("strokes", resolvePageId(doc, pageId));
+  if (!doc.share.has(key)) return 0;
+  return doc.getArray(key).length;
+}
+
+export function writePageMetadata(doc: Y.Doc, pageId: string, name?: string): void {
+  const pages = doc.getMap(YKEYS.pages);
+  if (pages.has(pageId)) return;
+  const meta = new Y.Map<unknown>();
+  meta.set("id", pageId);
+  meta.set("name", name ?? pageId);
+  pages.set(pageId, meta);
 }

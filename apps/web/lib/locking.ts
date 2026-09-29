@@ -1,7 +1,8 @@
 import * as Y from "yjs";
 import { MAX_LOCKED_IDS } from "@liveboard/shared";
 import { readBoardMeta, writeBoardMeta } from "./board-meta";
-import { getAssets, readAsset } from "./assets";
+import { readAsset } from "./assets";
+import { isBoundToDoc, readAssets } from "./page-model";
 import { entityFingerprint } from "./entity-fingerprint";
 import { LOCAL_ORIGIN } from "./strokes";
 
@@ -12,11 +13,14 @@ export function lockedEntityFingerprints(doc: Y.Doc): Map<string, string | null>
   for (const id of meta.lockedIds) {
     out.set(id, entityFingerprint(doc, id));
   }
-  getAssets(doc).forEach((m, id) => {
-    if (m instanceof Y.Map && readAsset(m).locked) {
-      out.set(id, entityFingerprint(doc, id));
-    }
-  });
+  const assets = readAssets(doc);
+  if (isBoundToDoc(doc, assets)) {
+    assets.forEach((m, id) => {
+      if (m instanceof Y.Map && readAsset(m).locked) {
+        out.set(id, entityFingerprint(doc, id));
+      }
+    });
+  }
   return out;
 }
 
@@ -29,7 +33,9 @@ export function lockedEntitiesMutated(doc: Y.Doc, before: Map<string, string | n
 
 export function isLocked(doc: Y.Doc, id: string): boolean {
   if (readBoardMeta(doc).lockedIds.includes(id)) return true;
-  const asset = getAssets(doc).get(id);
+  const assets = readAssets(doc);
+  if (!isBoundToDoc(doc, assets)) return false;
+  const asset = assets.get(id);
   if (asset instanceof Y.Map) return readAsset(asset).locked;
   return false;
 }

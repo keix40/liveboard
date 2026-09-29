@@ -1,12 +1,12 @@
 import * as Y from "yjs";
 import { type NoteField, type StickyNote } from "@liveboard/shared";
-import { getPageContent } from "./page-model";
+import { readNotes, writeNotes } from "./page-model";
 import { LOCAL_ORIGIN } from "./strokes";
 
 export type YNote = Y.Map<unknown>;
 
 export function getNotes(doc: Y.Doc, pageId?: string): Y.Map<YNote> {
-  return getPageContent(doc, pageId).notes as Y.Map<YNote>;
+  return readNotes(doc, pageId) as Y.Map<YNote>;
 }
 
 export function readNote(m: YNote): StickyNote {
@@ -48,7 +48,7 @@ export function createNote(
       ["createdAt", Date.now()],
     ];
     for (const [k, v] of fields) note.set(k, v);
-    getNotes(doc, pageId).set(opts.id, note);
+    writeNotes(doc, pageId).set(opts.id, note);
   }, LOCAL_ORIGIN);
   return note;
 }

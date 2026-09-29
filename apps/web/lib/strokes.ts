@@ -1,7 +1,7 @@
 import * as Y from "yjs";
 import { getStroke } from "perfect-freehand";
 import { type Point, type StrokeField, type StrokeVariant } from "@liveboard/shared";
-import { getPageContent } from "./page-model";
+import { readStrokes, writeStrokes } from "./page-model";
 
 /**
  * Freehand strokes live in doc.getArray("strokes") as Y.Map entries:
@@ -17,7 +17,7 @@ export const LOCAL_ORIGIN = Symbol("local");
 export const PROVISIONAL_ORIGIN = Symbol("provisional");
 
 export function getStrokes(doc: Y.Doc, pageId?: string): Y.Array<YStroke> {
-  return getPageContent(doc, pageId).strokes as Y.Array<YStroke>;
+  return readStrokes(doc, pageId) as Y.Array<YStroke>;
 }
 
 export function flatToPoints(flat: ArrayLike<number>): Point[] {
@@ -53,7 +53,7 @@ export function beginStroke(
     ];
     for (const [k, v] of fields) stroke.set(k, v);
     points.push(opts.first);
-    getStrokes(doc, pageId).push([stroke]);
+    writeStrokes(doc, pageId).push([stroke]);
   }, LOCAL_ORIGIN);
   return points;
 }

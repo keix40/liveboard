@@ -45,7 +45,8 @@ import { computeContentBounds } from "@/lib/board-bounds";
 import { exportBoardPdf, exportBoardPng } from "@/lib/export-board";
 import { NoteLayer } from "./NoteLayer";
 import { BoardSidePanel } from "./BoardSidePanel";
-import { ensureBoardMeta, readBoardMeta, writeBoardMeta } from "@/lib/board-meta";
+import { readBoardMeta, writeBoardMeta } from "@/lib/board-meta";
+import { isBoundToDoc, readStrokeCount } from "@/lib/page-model";
 import { stabilizePoint } from "@/lib/stroke-stabilizer";
 import { recognizeStrokeShape } from "@/lib/shape-recognize";
 import { getAssets, readAsset, type BoardAsset } from "@/lib/assets";
@@ -53,7 +54,6 @@ import { assetDataToBlobUrl } from "@/lib/asset-decode";
 import { cameraForFrame, frameBounds, frameFromViewport } from "@/lib/frames";
 import { isLocked, lockedEntitiesMutated, lockedEntityFingerprints, toggleLock } from "@/lib/locking";
 import { listHistorySnapshots, pushSnapshot, restoreHistorySnapshot } from "@/lib/snapshots";
-import { ensurePageModel } from "@/lib/page-model";
 import { restorePageSnapshot, type PageSnapshot } from "@/lib/pages";
 import { getComments, type PinnedComment } from "@/lib/comments";
 import { getReactions, type BoardReaction } from "@/lib/reactions";
@@ -204,32 +204,52 @@ export function Whiteboard({
     [renderDoc, contentPreview, activePageId, metaRevision],
   );
 
-  const undo = useMemo(() => {
-    if (!doc || !strokes || !shapesMap || !notesMap || !assetsMap) return null;
-    return new Y.UndoManager([strokes, shapesMap, notesMap, assetsMap], {
-      trackedOrigins: new Set([LOCAL_ORIGIN]),
-      captureTimeout: 300,
-    });
+  const boundStrokes = renderDoc && isBoundToDoc(renderDoc, strokes) ? strokes : null;
+  const boundShapes = renderDoc && isBoundToDoc(renderDoc, shapesMap) ? shapesMap : null;
+  const boundNotes = renderDoc && isBoundToDoc(renderDoc, notesMap) ? notesMap : null;
+  const boundAssets = renderDoc && isBoundToDoc(renderDoc, assetsMap) ? assetsMap : null;
+
+  const undoRef = useRef<Y.UndoManager | null>(null);
+
+  useEffect(() => {
+    if (!doc) return;
+    if (!undoRef.current) {
+      undoRef.current = new Y.UndoManager([], {
+        trackedOrigins: new Set([LOCAL_ORIGIN]),
+        captureTimeout: 300,
+      });
+    }
+    for (const t of [strokes, shapesMap, notesMap, assetsMap]) {
+      if (t && isBoundToDoc(doc, t)) undoRef.current.addToScope(t);
+    }
   }, [doc, strokes, shapesMap, notesMap, assetsMap]);
-  useEffect(() => () => undo?.destroy(), [undo]);
+
+  useEffect(() => {
+    return () => {
+      undoRef.current?.destroy();
+      undoRef.current = null;
+    };
+  }, [doc]);
 
   const safeUndo = useCallback(() => {
+    const undo = undoRef.current;
     if (!doc || !undo) return;
     const before = lockedEntityFingerprints(doc);
     undo.undo();
     if (lockedEntitiesMutated(doc, before)) undo.redo();
-  }, [doc, undo]);
+  }, [doc]);
 
   const safeRedo = useCallback(() => {
+    const undo = undoRef.current;
     if (!doc || !undo) return;
     const before = lockedEntityFingerprints(doc);
     undo.redo();
     if (lockedEntitiesMutated(doc, before)) undo.undo();
-  }, [doc, undo]);
+  }, [doc]);
 
   const beginAction = useCallback(() => {
-    undo?.stopCapturing();
-  }, [undo]);
+    undoRef.current?.stopCapturing();
+  }, []);
 
   useLayoutEffect(() => {
     const el = chromeRef.current;
@@ -250,27 +270,27 @@ export function Whiteboard({
 
   const collectShapes = useCallback(() => {
     const m = new Map<string, Y.Map<unknown>>();
-    shapesMap?.forEach((v, k) => m.set(k, v));
+    boundShapes?.forEach((v, k) => m.set(k, v));
     return m;
-  }, [shapesMap]);
+  }, [boundShapes]);
 
   const collectNotes = useCallback(() => {
     const m = new Map<string, Y.Map<unknown>>();
-    notesMap?.forEach((v, k) => m.set(k, v));
+    boundNotes?.forEach((v, k) => m.set(k, v));
     return m;
-  }, [notesMap]);
+  }, [boundNotes]);
 
   const collectAssetsPlain = useCallback((): Map<string, BoardAsset> => {
     const m = new Map<string, BoardAsset>();
-    assetsMap?.forEach((v, k) => m.set(k, readAsset(v)));
+    boundAssets?.forEach((v, k) => m.set(k, readAsset(v)));
     return m;
-  }, [assetsMap]);
+  }, [boundAssets]);
 
   const collectAssetsY = useCallback(() => {
     const m = new Map<string, Y.Map<unknown>>();
-    assetsMap?.forEach((v, k) => m.set(k, v));
+    boundAssets?.forEach((v, k) => m.set(k, v));
     return m;
-  }, [assetsMap]);
+  }, [boundAssets]);
 
   const toWorldFromClient = useCallback(
     (clientX: number, clientY: number) => {
@@ -303,7 +323,7 @@ export function Whiteboard({
   const buildRenderOpts = useCallback(() => {
     const canvas = canvasRef.current!;
     const dpr = window.devicePixelRatio || 1;
-    const strokeList = strokes!.toArray();
+    const strokeList = boundStrokes ? boundStrokes.toArray() : [];
     const reactions: BoardReaction[] = [];
     const comments: PinnedComment[] = [];
     if (doc) {
@@ -357,7 +377,7 @@ export function Whiteboard({
     };
   }, [
     camera,
-    strokes,
+    boundStrokes,
     collectShapes,
     collectNotes,
     collectAssetsPlain,
@@ -376,7 +396,7 @@ export function Whiteboard({
   const paintFrame = useCallback(
     (repaintBase: boolean) => {
       const canvas = canvasRef.current;
-      if (!canvas || !strokes || !shapesMap || !notesMap) return;
+      if (!canvas) return;
       if (!compositorRef.current) compositorRef.current = new BoardCompositor(canvas);
       const compositor = compositorRef.current;
       const dpr = window.devicePixelRatio || 1;
@@ -405,86 +425,113 @@ export function Whiteboard({
     if (!doc || !conn) return;
     const provider = conn.provider;
     const onSynced = (synced: boolean) => {
-      if (!synced) return;
-      ensurePageModel(doc);
-      setMetaRevision((n) => n + 1);
+      if (synced) setMetaRevision((n) => n + 1);
     };
     provider.on("sync", onSynced);
     if (provider.synced) onSynced(true);
-    const pagesMap = doc.getMap(YKEYS.pages);
+    const pagesMap = doc.share.has(YKEYS.pages) ? doc.getMap(YKEYS.pages) : null;
     const onPagesDeep = () => setMetaRevision((n) => n + 1);
-    pagesMap.observeDeep(onPagesDeep);
+    pagesMap?.observeDeep(onPagesDeep);
+    const contentKeys = () => new Set([...doc.share.keys()].filter((k) => /^(strokes|shapes|notes|assets)(:|$)/.test(k)));
+    let seenContent = contentKeys();
+    const onDocChange = () => {
+      const next = contentKeys();
+      if (next.size !== seenContent.size || [...next].some((k) => !seenContent.has(k))) {
+        seenContent = next;
+        setMetaRevision((n) => n + 1);
+      }
+    };
+    doc.on("afterTransaction", onDocChange);
     return () => {
       provider.off("sync", onSynced);
-      pagesMap.unobserveDeep(onPagesDeep);
+      pagesMap?.unobserveDeep(onPagesDeep);
+      doc.off("afterTransaction", onDocChange);
     };
   }, [doc, conn]);
 
   useEffect(() => {
-    if (!strokes || !shapesMap || !notesMap || !assetsMap) return;
-    const onStrokesDeep = (events: Y.YEvent<any>[]) => {
-      if (
-        isStrokePointsOnlyUpdate(events) &&
-        eventsAreLocal(events) &&
-        localLiveStrokeIndexRef.current != null
-      ) {
-        scheduleFrame(false);
-      } else {
+    if (!doc) return;
+    const cleanups: Array<() => void> = [];
+
+    if (boundStrokes) {
+      const onStrokesDeep = (events: Y.YEvent<any>[]) => {
+        if (
+          isStrokePointsOnlyUpdate(events) &&
+          eventsAreLocal(events) &&
+          localLiveStrokeIndexRef.current != null
+        ) {
+          scheduleFrame(false);
+        } else {
+          scheduleFrame(true);
+        }
+      };
+      const onStrokesShallow = () => setStrokeCount(boundStrokes.length);
+      boundStrokes.observeDeep(onStrokesDeep);
+      boundStrokes.observe(onStrokesShallow);
+      cleanups.push(() => {
+        boundStrokes.unobserveDeep(onStrokesDeep);
+        boundStrokes.unobserve(onStrokesShallow);
+      });
+    }
+
+    if (boundShapes) {
+      const onStructure = () => scheduleFrame(true);
+      const onShapesChange = () => {
+        setShapeCount(boundShapes.size);
         scheduleFrame(true);
-      }
-    };
-    const onStrokesShallow = () => setStrokeCount(strokes.length);
-    const onStructure = () => scheduleFrame(true);
-    const onShapesChange = () => {
-      setShapeCount(shapesMap.size);
-      scheduleFrame(true);
-    };
-    const onNotesMap = (event: Y.YMapEvent<YNote>) => {
-      if (event.changes.keys.size > 0) {
-        setNotesRevision((n) => n + 1);
+      };
+      boundShapes.observe(onStructure);
+      boundShapes.observe(onShapesChange);
+      cleanups.push(() => {
+        boundShapes.unobserve(onStructure);
+        boundShapes.unobserve(onShapesChange);
+      });
+    }
+
+    if (boundNotes) {
+      const onNotesMap = (event: Y.YMapEvent<YNote>) => {
+        if (event.changes.keys.size > 0) {
+          setNotesRevision((n) => n + 1);
+          scheduleFrame(true);
+        }
+      };
+      boundNotes.observe(onNotesMap);
+      cleanups.push(() => boundNotes.unobserve(onNotesMap));
+    }
+
+    if (boundAssets) {
+      const onAssets = () => {
+        setAssetRevision((n) => n + 1);
         scheduleFrame(true);
-      }
-    };
-    strokes.observeDeep(onStrokesDeep);
-    strokes.observe(onStrokesShallow);
-    shapesMap.observe(onStructure);
-    shapesMap.observe(onShapesChange);
-    notesMap.observe(onNotesMap);
-    const onAssets = () => {
-      setAssetRevision((n) => n + 1);
-      scheduleFrame(true);
-    };
-    assetsMap.observe(onAssets);
-    const reactionsMap = doc ? getReactions(doc) : null;
-    const commentsMap = doc ? getComments(doc) : null;
+      };
+      boundAssets.observe(onAssets);
+      cleanups.push(() => boundAssets.unobserve(onAssets));
+    }
+
+    const reactionsMap = getReactions(doc);
+    const commentsMap = getComments(doc);
     const onSocial = () => {
       setReactionsRevision((n) => n + 1);
       setCommentsRevision((n) => n + 1);
       scheduleFrame(true);
     };
-    reactionsMap?.observe(onSocial);
-    commentsMap?.observe(onSocial);
-    const metaMap = doc?.getMap("meta");
+    reactionsMap.observe(onSocial);
+    commentsMap.observe(onSocial);
+    cleanups.push(() => {
+      reactionsMap.unobserve(onSocial);
+      commentsMap.unobserve(onSocial);
+    });
+
+    const metaMap = doc.share.has(YKEYS.meta) ? doc.getMap(YKEYS.meta) : null;
     const onMeta = () => setMetaRevision((n) => n + 1);
-    if (doc && metaMap) {
-      metaMap.observe(onMeta);
-      ensureBoardMeta(doc, LOCAL_ORIGIN);
-    }
-    setStrokeCount((n) => (n === strokes.length ? n : strokes.length));
-    setShapeCount((n) => (n === shapesMap.size ? n : shapesMap.size));
+    metaMap?.observe(onMeta);
+    if (metaMap) cleanups.push(() => metaMap.unobserve(onMeta));
+
     scheduleFrame(true);
     return () => {
-      strokes.unobserveDeep(onStrokesDeep);
-      strokes.unobserve(onStrokesShallow);
-      shapesMap.unobserve(onStructure);
-      shapesMap.unobserve(onShapesChange);
-      notesMap.unobserve(onNotesMap);
-      assetsMap.unobserve(onAssets);
-      reactionsMap?.unobserve(onSocial);
-      commentsMap?.unobserve(onSocial);
-      if (metaMap) metaMap.unobserve(onMeta);
+      for (const fn of cleanups) fn();
     };
-  }, [strokes, shapesMap, notesMap, assetsMap, doc, scheduleFrame]);
+  }, [boundStrokes, boundShapes, boundNotes, boundAssets, doc, scheduleFrame]);
 
   useEffect(() => {
     if (!doc || !contentPreview) {
@@ -509,14 +556,14 @@ export function Whiteboard({
       d.destroy();
       previewDocRef.current = null;
     };
-  }, [contentPreview, doc, scheduleFrame]);
+  }, [contentPreview, doc, scheduleFrame, boundAssets]);
 
   useEffect(() => {
-    if (!assetsMap) return;
+    if (!boundAssets) return;
     let cancelled = false;
     const load = async () => {
       const next = new Map<string, CanvasImageSource>();
-      for (const [id, m] of assetsMap.entries()) {
+      for (const [id, m] of boundAssets.entries()) {
         const a = readAsset(m);
         try {
           const url = await assetDataToBlobUrl(a.dataBase64, a.mime);
@@ -543,7 +590,7 @@ export function Whiteboard({
     return () => {
       cancelled = true;
     };
-  }, [assetsMap, assetRevision]);
+  }, [boundAssets, assetRevision]);
 
   useEffect(() => {
     if (!doc || readOnly) return;
@@ -698,7 +745,14 @@ export function Whiteboard({
 
     if (tool === "select") {
       beginAction();
-      const hit = pickAt(strokes!.toArray(), collectShapes(), collectNotes(), world.x, world.y, collectAssetsY());
+      const hit = pickAt(
+        boundStrokes ? boundStrokes.toArray() : [],
+        collectShapes(),
+        collectNotes(),
+        world.x,
+        world.y,
+        collectAssetsY(),
+      );
       if (hit && e.shiftKey) {
         setSelection((sel) => (sel.some((s) => s.id === hit.id) ? sel.filter((s) => s.id !== hit.id) : [...sel, hit]));
       } else if (hit) {
@@ -848,7 +902,7 @@ export function Whiteboard({
     if (tool === "select" && dragSelectionRef.current) {
       const dx = world.x - dragSelectionRef.current.startX;
       const dy = world.y - dragSelectionRef.current.startY;
-      moveSelection(doc, dragSelectionRef.current.snapshot, dx, dy);
+      moveSelection(doc, dragSelectionRef.current.snapshot, dx, dy, activePageId);
       dragSelectionRef.current.startX = world.x;
       dragSelectionRef.current.startY = world.y;
       return;
@@ -1078,22 +1132,24 @@ export function Whiteboard({
   }, [safeUndo, safeRedo, readOnly]);
 
   const clear = () => {
-    if (!doc || !strokes || readOnly) return;
+    if (!doc || readOnly) return;
     if (!confirm("Clear the board for everyone? (Undo restores it)")) return;
     beginAction();
     doc.transact(() => {
-      for (let i = strokes.length - 1; i >= 0; i--) {
-        const s = readStroke(strokes.get(i)!);
-        if (!isLocked(doc, s.id)) strokes.delete(i, 1);
+      if (boundStrokes) {
+        for (let i = boundStrokes.length - 1; i >= 0; i--) {
+          const s = readStroke(boundStrokes.get(i)!);
+          if (!isLocked(doc, s.id)) boundStrokes.delete(i, 1);
+        }
       }
-      shapesMap?.forEach((_, k) => {
-        if (!isLocked(doc, k)) shapesMap.delete(k);
+      boundShapes?.forEach((_, k) => {
+        if (!isLocked(doc, k)) boundShapes.delete(k);
       });
-      notesMap?.forEach((_, k) => {
-        if (!isLocked(doc, k)) notesMap.delete(k);
+      boundNotes?.forEach((_, k) => {
+        if (!isLocked(doc, k)) boundNotes.delete(k);
       });
-      assetsMap?.forEach((_, k) => {
-        if (!isLocked(doc, k)) assetsMap.delete(k);
+      boundAssets?.forEach((_, k) => {
+        if (!isLocked(doc, k)) boundAssets.delete(k);
       });
     }, LOCAL_ORIGIN);
     setSelection([]);
@@ -1108,7 +1164,7 @@ export function Whiteboard({
         if (sel.kind === "stroke") deleteStrokeById(doc, sel.id, activePageId);
         else if (sel.kind === "shape") deleteShape(doc, sel.id);
         else if (sel.kind === "note") deleteNote(doc, sel.id);
-        else assetsMap?.delete(sel.id);
+        else boundAssets?.delete(sel.id);
       }
     }, LOCAL_ORIGIN);
     setSelection([]);
@@ -1258,9 +1314,17 @@ export function Whiteboard({
           ref={canvasRef}
           data-testid="board-canvas"
           data-canvas-id={canvasInstanceId.current}
-          data-stroke-count={strokes?.length ?? strokeCount}
-          data-shape-count={shapeCount}
-          data-asset-count={assetsMap?.size ?? 0}
+          data-stroke-count={
+            renderDoc
+              ? isBoundToDoc(renderDoc, strokes)
+                ? strokes!.length
+                : readStrokeCount(renderDoc, contentPreview ? undefined : activePageId)
+              : strokeCount
+          }
+          data-shape-count={
+            boundShapes ? boundShapes.size : shapeCount
+          }
+          data-asset-count={boundAssets?.size ?? 0}
           data-camera={`${camera.x},${camera.y},${camera.zoom}`}
           style={{ cursor: cursorStyle, touchAction: "none" }}
           onPointerDown={onPointerDown}
@@ -1358,9 +1422,15 @@ export function Whiteboard({
   );
 }
 
-function moveSelection(doc: Y.Doc, selection: SelectableRef[], dx: number, dy: number): void {
+function moveSelection(
+  doc: Y.Doc,
+  selection: SelectableRef[],
+  dx: number,
+  dy: number,
+  pageId: string,
+): void {
   if (dx === 0 && dy === 0) return;
-  const strokes = getStrokes(doc);
+  const strokes = getStrokes(doc, pageId);
   doc.transact(() => {
     for (const sel of selection) {
       if (isLocked(doc, sel.id)) continue;
@@ -1380,19 +1450,19 @@ function moveSelection(doc: Y.Doc, selection: SelectableRef[], dx: number, dy: n
           break;
         }
       } else if (sel.kind === "shape") {
-        const m = getShapes(doc).get(sel.id);
+        const m = getShapes(doc, pageId).get(sel.id);
         if (m instanceof Y.Map) {
           m.set("x", Number(m.get("x") ?? 0) + dx);
           m.set("y", Number(m.get("y") ?? 0) + dy);
         }
       } else if (sel.kind === "note") {
-        const m = getNotes(doc).get(sel.id);
+        const m = getNotes(doc, pageId).get(sel.id);
         if (m instanceof Y.Map) {
           m.set("x", Number(m.get("x") ?? 0) + dx);
           m.set("y", Number(m.get("y") ?? 0) + dy);
         }
       } else {
-        const m = getAssets(doc).get(sel.id);
+        const m = getAssets(doc, pageId).get(sel.id);
         if (m instanceof Y.Map) {
           m.set("x", Number(m.get("x") ?? 0) + dx);
           m.set("y", Number(m.get("y") ?? 0) + dy);

@@ -1,7 +1,7 @@
 import * as Y from "yjs";
 import { ASSET_MAX_BYTES, ASSET_ROOM_MAX_BYTES } from "@liveboard/shared";
 import { bytesToBase64 } from "./base64";
-import { getPageContent } from "./page-model";
+import { readAssets, writeAssets } from "./page-model";
 import { LOCAL_ORIGIN } from "./strokes";
 
 export interface BoardAsset {
@@ -18,7 +18,7 @@ export interface BoardAsset {
 }
 
 export function getAssets(doc: Y.Doc, pageId?: string): Y.Map<Y.Map<unknown>> {
-  return getPageContent(doc, pageId).assets;
+  return readAssets(doc, pageId);
 }
 
 function assetBytes(map: Y.Map<Y.Map<unknown>>): number {
@@ -92,6 +92,7 @@ export function upsertAsset(doc: Y.Doc, asset: BoardAsset, pageId?: string): voi
     throw new Error(`Room asset budget exceeded (${ASSET_ROOM_MAX_BYTES} bytes)`);
   }
   doc.transact(() => {
+    const writeMap = writeAssets(doc, pageId);
     const m = new Y.Map<unknown>();
     m.set("id", asset.id);
     m.set("mime", asset.mime);
@@ -103,6 +104,6 @@ export function upsertAsset(doc: Y.Doc, asset: BoardAsset, pageId?: string): voi
     m.set("locked", asset.locked);
     m.set("z", asset.z);
     m.set("authorId", asset.authorId);
-    map.set(asset.id, m);
+    writeMap.set(asset.id, m);
   }, LOCAL_ORIGIN);
 }

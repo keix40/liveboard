@@ -24,6 +24,8 @@ CREATE INDEX IF NOT EXISTS liveboard_updates_room_id_id ON liveboard_updates (ro
  * Compaction runs in a transaction guarded by a per-room advisory lock so two
  * instances never fold the same log concurrently.
  */
+let schemaInitPromise: Promise<void> | null = null;
+
 export class PostgresPersistence implements DocPersistence {
   readonly name = "postgres";
   private readonly pool: pg.Pool;
@@ -41,7 +43,8 @@ export class PostgresPersistence implements DocPersistence {
   }
 
   async init(): Promise<void> {
-    await this.pool.query(SCHEMA);
+    schemaInitPromise ??= this.pool.query(SCHEMA).then(() => undefined);
+    await schemaInitPromise;
   }
 
   async load(roomId: string): Promise<Uint8Array | null> {

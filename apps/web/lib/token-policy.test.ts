@@ -58,6 +58,36 @@ describe("evaluateTokenAccess", () => {
     expect(result).toEqual({ ok: true, role: "editor", legacyOpen: false });
   });
 
+  it("claimed room rejects viewer without view or edit cap", async () => {
+    const room = "viewer-gated";
+    await createRoomRecord(room);
+    const record = await getRoomRecord(room);
+    const result = evaluateTokenAccess({
+      record,
+      requestedRole: "viewer",
+      room,
+      jwtSecret: SECRET,
+      editCap: "",
+      viewCap: "",
+    });
+    expect(result).toEqual({ ok: false, error: "view or edit capability required" });
+  });
+
+  it("claimed room accepts viewer with edit cap link", async () => {
+    const room = "viewer-edit-cap";
+    const { editCap } = (await createRoomRecord(room)) as { editCap: string };
+    const record = await getRoomRecord(room);
+    const result = evaluateTokenAccess({
+      record,
+      requestedRole: "viewer",
+      room,
+      jwtSecret: SECRET,
+      editCap,
+      viewCap: "",
+    });
+    expect(result).toEqual({ ok: true, role: "viewer", legacyOpen: false });
+  });
+
   it("view link mints viewer only; view cap cannot escalate to edit on claimed room", async () => {
     const room = "view-only";
     await createRoomRecord(room);

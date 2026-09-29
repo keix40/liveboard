@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { writeBoardMeta } from "./board-meta";
 import { lockedEntitiesMutated, lockedEntityFingerprints } from "./locking";
-import { LOCAL_ORIGIN, getStrokes } from "./strokes";
+import { LOCAL_ORIGIN } from "./strokes";
+import { writeStrokes } from "./page-model";
 
 describe("locking undo guard", () => {
   it("detects when a locked stroke would change", () => {
@@ -13,7 +14,7 @@ describe("locking undo guard", () => {
     const pts = new Y.Array<number>();
     pts.push([0, 0, 0.5]);
     stroke.set("points", pts);
-    getStrokes(doc).push([stroke]);
+    writeStrokes(doc).push([stroke]);
     const before = lockedEntityFingerprints(doc);
     pts.push([1, 1, 0.5]);
     expect(lockedEntitiesMutated(doc, before)).toBe(true);

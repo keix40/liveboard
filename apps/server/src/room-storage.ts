@@ -14,7 +14,7 @@ export function rebaseRoomStorage(state: RoomStorageState, doc: Y.Doc): void {
   state.storedBytes = measureDocBytes(doc);
 }
 
-/** O(1) checks — budget uses rebased doc size + incoming update upper bound. */
+/** Budget check: rebased doc size + incoming update size (rebase on load / compaction). */
 export function incomingUpdateAllowed(
   state: RoomStorageState,
   updateByteLength: number,
@@ -26,4 +26,9 @@ export function incomingUpdateAllowed(
     return { ok: false, reason: "room_storage_cap" };
   }
   return { ok: true };
+}
+
+/** Track applied update payload size without re-encoding the full doc. */
+export function recordAppliedUpdate(state: RoomStorageState, updateByteLength: number): void {
+  state.storedBytes += updateByteLength;
 }

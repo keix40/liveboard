@@ -1,15 +1,12 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { writeBoardMeta } from "./board-meta";
-import { ensurePage } from "./page-model";
 import { beginStroke, getStrokes, LOCAL_ORIGIN } from "./strokes";
 
 describe("pages", () => {
   it("switching page id changes which stroke array is active", () => {
     const doc = new Y.Doc();
     writeBoardMeta(doc, { pageOrder: ["page-1", "page-2"], activePageId: "page-1" }, LOCAL_ORIGIN);
-    ensurePage(doc, "page-1");
-    ensurePage(doc, "page-2");
     beginStroke(doc, {
       id: "s1",
       authorId: "u",

@@ -36,7 +36,7 @@ export const PDF_MAX_PAGES = 10;
 
 export const MAX_LOCKED_IDS = 500;
 
-/** Server-side room storage budget (sum of applied update payloads; O(1) accounting). */
+/** Server-side room storage budget (rebased doc size + incoming update upper bound between compactions). */
 export const ROOM_MAX_STORED_BYTES = 8 * 1024 * 1024;
 export const ROOM_MAX_SINGLE_UPDATE_BYTES = 512 * 1024;
 
@@ -214,6 +214,14 @@ export function colorForId(id: string): string {
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
   return CURSOR_COLORS[Math.abs(h) % CURSOR_COLORS.length]!;
 }
+
+export {
+  DEFAULT_PAGE_ID,
+  allPageContentKeys,
+  pageContentKey,
+  pageIdFromContentKey,
+  type PageContentKind,
+} from "./page-keys.js";
 
 export interface HealthResponse {
   status: "ok";
