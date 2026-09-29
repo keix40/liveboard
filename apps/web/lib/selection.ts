@@ -1,6 +1,7 @@
 import type { Shape } from "@liveboard/shared";
 import type { StickyNote } from "@liveboard/shared";
 import { readStroke, type YStroke } from "./strokes";
+import { isLineLikeKind, lineLikeBounds } from "./shape-geometry";
 import { hitShape, readShape, type YShape } from "./shapes";
 import { hitNote, readNote, type YNote } from "./notes";
 
@@ -32,7 +33,7 @@ export function marqueeSelect(
   }
   for (const [id, m] of shapes) {
     const sh = readShape(m);
-    const b = { minX: sh.x, minY: sh.y, maxX: sh.x + sh.w, maxY: sh.y + sh.h };
+    const b = isLineLikeKind(sh.kind) ? lineLikeBounds(sh) : { minX: sh.x, minY: sh.y, maxX: sh.x + sh.w, maxY: sh.y + sh.h };
     if (b.maxX >= minX && b.minX <= maxX && b.maxY >= minY && b.minY <= maxY) hits.push({ kind: "shape", id });
   }
   for (const [id, m] of notes) {
@@ -59,8 +60,8 @@ export function lassoSelect(
   }
   for (const [id, m] of shapes) {
     const sh = readShape(m);
-    const cx = sh.x + sh.w / 2;
-    const cy = sh.y + sh.h / 2;
+    const cx = isLineLikeKind(sh.kind) ? (sh.x + (sh.x + sh.w)) / 2 : sh.x + sh.w / 2;
+    const cy = isLineLikeKind(sh.kind) ? (sh.y + (sh.y + sh.h)) / 2 : sh.y + sh.h / 2;
     if (inside(cx, cy)) hits.push({ kind: "shape", id });
   }
   for (const [id, m] of notes) {

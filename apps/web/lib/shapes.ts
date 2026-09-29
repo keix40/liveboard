@@ -1,5 +1,6 @@
 import * as Y from "yjs";
 import { YKEYS, type Shape, type ShapeField, type ShapeKind } from "@liveboard/shared";
+import { distanceToSegment, isLineLikeKind, lineLikeBounds } from "./shape-geometry";
 import { LOCAL_ORIGIN } from "./strokes";
 
 export type YShape = Y.Map<unknown>;
@@ -60,12 +61,22 @@ export function deleteShape(doc: Y.Doc, id: string): void {
 }
 
 export function shapeBounds(s: Shape): { minX: number; minY: number; maxX: number; maxY: number } {
+  if (isLineLikeKind(s.kind)) return lineLikeBounds(s);
   const xs = [s.x, s.x + s.w];
   const ys = [s.y, s.y + s.h];
   return { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) };
 }
 
 export function hitShape(s: Shape, wx: number, wy: number, pad = 6): boolean {
+  if (isLineLikeKind(s.kind)) {
+    const end = { x: s.x + s.w, y: s.y + s.h };
+    const hitWidth = Math.max(pad, s.strokeWidth / 2 + pad);
+    if (s.kind === "arrow") {
+      const head = Math.max(8, s.strokeWidth * 3);
+      if (Math.hypot(wx - end.x, wy - end.y) <= head + pad) return true;
+    }
+    return distanceToSegment(wx, wy, s.x, s.y, end.x, end.y) <= hitWidth;
+  }
   const b = shapeBounds(s);
   return wx >= b.minX - pad && wx <= b.maxX + pad && wy >= b.minY - pad && wy <= b.maxY + pad;
 }

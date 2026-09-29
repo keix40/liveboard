@@ -38,6 +38,7 @@ import {
   isStrokePointsOnlyUpdate,
 } from "@/lib/yjs-events";
 import { getShapes, upsertShape, deleteShape } from "@/lib/shapes";
+import { isLineLikeKind, lineLikeLength } from "@/lib/shape-geometry";
 import { createNote, deleteNote, getNotes, type YNote } from "@/lib/notes";
 import { lassoSelect, pickAt, type SelectableRef } from "@/lib/selection";
 import { computeContentBounds } from "@/lib/board-bounds";
@@ -90,6 +91,15 @@ export function Whiteboard({ roomId }: { roomId: string }) {
   } | null>(null);
   const panRef = useRef<{ lastX: number; lastY: number } | null>(null);
   const shapeStartRef = useRef<{ x: number; y: number } | null>(null);
+  const previewShapeRef = useRef<{
+    kind: string;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    stroke: string;
+    strokeWidth: number;
+  } | null>(null);
   const lassoRef = useRef<{ x: number; y: number }[]>([]);
   const dragSelectionRef = useRef<{ startX: number; startY: number; snapshot: SelectableRef[] } | null>(null);
 
@@ -97,6 +107,7 @@ export function Whiteboard({ roomId }: { roomId: string }) {
   const [color, setColor] = useState("#0f172a");
   const [size, setSize] = useState(8);
   const [strokeCount, setStrokeCount] = useState(0);
+  const [shapeCount, setShapeCount] = useState(0);
   const [camera, setCamera] = useState<Camera>(DEFAULT_CAMERA);
   const [selection, setSelection] = useState<SelectableRef[]>([]);
   const [lassoPath, setLassoPath] = useState<{ x: number; y: number }[]>([]);
@@ -233,6 +244,10 @@ export function Whiteboard({ roomId }: { roomId: string }) {
     };
     const onStrokesShallow = () => setStrokeCount(strokes.length);
     const onStructure = () => scheduleFrame(true);
+    const onShapesChange = () => {
+      setShapeCount(shapesMap.size);
+      scheduleFrame(true);
+    };
     const onNotesMap = (event: Y.YMapEvent<YNote>) => {
       if (event.changes.keys.size > 0) {
         setNotesRevision((n) => n + 1);
@@ -242,14 +257,17 @@ export function Whiteboard({ roomId }: { roomId: string }) {
     strokes.observeDeep(onStrokesDeep);
     strokes.observe(onStrokesShallow);
     shapesMap.observe(onStructure);
+    shapesMap.observe(onShapesChange);
     notesMap.observe(onNotesMap);
     setStrokeCount(strokes.length);
+    setShapeCount(shapesMap.size);
     setNotesRevision((n) => n + 1);
     scheduleFrame(true);
     return () => {
       strokes.unobserveDeep(onStrokesDeep);
       strokes.unobserve(onStrokesShallow);
       shapesMap.unobserve(onStructure);
+      shapesMap.unobserve(onShapesChange);
       notesMap.unobserve(onNotesMap);
     };
   }, [strokes, shapesMap, notesMap, scheduleFrame]);
@@ -435,7 +453,7 @@ export function Whiteboard({ roomId }: { roomId: string }) {
     if (SHAPE_TOOLS.has(tool)) {
       beginAction();
       shapeStartRef.current = { x: world.x, y: world.y };
-      setPreviewShape({
+      previewShapeRef.current = {
         kind: tool,
         x: world.x,
         y: world.y,
@@ -443,7 +461,8 @@ export function Whiteboard({ roomId }: { roomId: string }) {
         h: 0,
         stroke: color,
         strokeWidth: size,
-      });
+      };
+      setPreviewShape(previewShapeRef.current);
       return;
     }
 
@@ -523,16 +542,27 @@ export function Whiteboard({ roomId }: { roomId: string }) {
       return;
     }
 
-    if (shapeStartRef.current && previewShape) {
+    const livePreview = previewShapeRef.current;
+    if (shapeStartRef.current && livePreview) {
       const x0 = shapeStartRef.current.x;
       const y0 = shapeStartRef.current.y;
-      setPreviewShape({
-        ...previewShape,
-        x: Math.min(x0, world.x),
-        y: Math.min(y0, world.y),
-        w: Math.abs(world.x - x0),
-        h: Math.abs(world.y - y0),
-      });
+      const next = isLineLikeKind(livePreview.kind)
+        ? {
+            ...livePreview,
+            x: x0,
+            y: y0,
+            w: world.x - x0,
+            h: world.y - y0,
+          }
+        : {
+            ...livePreview,
+            x: Math.min(x0, world.x),
+            y: Math.min(y0, world.y),
+            w: Math.abs(world.x - x0),
+            h: Math.abs(world.y - y0),
+          };
+      previewShapeRef.current = next;
+      setPreviewShape(next);
       return;
     }
 
@@ -576,6 +606,48 @@ export function Whiteboard({ roomId }: { roomId: string }) {
 
     releaseCapture(e);
 
+    if (shapeStartRef.current && previewShapeRef.current && doc && identity) {
+      const canvas = e.currentTarget;
+      const r = canvas.getBoundingClientRect();
+      const endWorld = screenToWorld(camera, e.clientX - r.left, e.clientY - r.top);
+      const x0 = shapeStartRef.current.x;
+      const y0 = shapeStartRef.current.y;
+      let committedPreview = previewShapeRef.current;
+      committedPreview = isLineLikeKind(committedPreview.kind)
+        ? { ...committedPreview, x: x0, y: y0, w: endWorld.x - x0, h: endWorld.y - y0 }
+        : {
+            ...committedPreview,
+            x: Math.min(x0, endWorld.x),
+            y: Math.min(y0, endWorld.y),
+            w: Math.abs(endWorld.x - x0),
+            h: Math.abs(endWorld.y - y0),
+          };
+      const kind = committedPreview.kind as ShapeKind;
+      const bigEnough = isLineLikeKind(kind)
+        ? lineLikeLength(committedPreview.w, committedPreview.h) > 3
+        : committedPreview.w > 2 || committedPreview.h > 2;
+      if (bigEnough) {
+        upsertShape(doc, {
+          id: crypto.randomUUID(),
+          kind,
+          x: committedPreview.x,
+          y: committedPreview.y,
+          w: committedPreview.w,
+          h: committedPreview.h,
+          rotation: 0,
+          stroke: committedPreview.stroke,
+          fill: kind === "rect" || kind === "ellipse" ? `${committedPreview.stroke}22` : null,
+          strokeWidth: committedPreview.strokeWidth,
+          z: nextZ(),
+          authorId: identity.id,
+          createdAt: Date.now(),
+        });
+      }
+      shapeStartRef.current = null;
+      previewShapeRef.current = null;
+      setPreviewShape(null);
+    }
+
     if (wasGesture) {
       panRef.current = null;
       gesturePointerIdRef.current = null;
@@ -587,29 +659,6 @@ export function Whiteboard({ roomId }: { roomId: string }) {
       lassoRef.current = [];
       setLassoPath([]);
       dragSelectionRef.current = null;
-
-      if (shapeStartRef.current && previewShape && doc && identity) {
-        const kind = previewShape.kind as ShapeKind;
-        if (previewShape.w > 2 || previewShape.h > 2) {
-          upsertShape(doc, {
-            id: crypto.randomUUID(),
-            kind,
-            x: previewShape.x,
-            y: previewShape.y,
-            w: previewShape.w,
-            h: previewShape.h,
-            rotation: 0,
-            stroke: previewShape.stroke,
-            fill: kind === "rect" || kind === "ellipse" ? `${previewShape.stroke}22` : null,
-            strokeWidth: previewShape.strokeWidth,
-            z: nextZ(),
-            authorId: identity.id,
-            createdAt: Date.now(),
-          });
-        }
-        shapeStartRef.current = null;
-        setPreviewShape(null);
-      }
     }
 
     if (pointerId === touchStrokePendingRef.current?.pointerId) {
@@ -798,6 +847,7 @@ export function Whiteboard({ roomId }: { roomId: string }) {
           data-testid="board-canvas"
           data-canvas-id={canvasInstanceId.current}
           data-stroke-count={strokeCount}
+          data-shape-count={shapeCount}
           data-camera={`${camera.x},${camera.y},${camera.zoom}`}
           style={{ cursor: cursorStyle, touchAction: "none" }}
           onPointerDown={onPointerDown}
