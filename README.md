@@ -111,7 +111,7 @@ Vercel Functions gained WebSocket support in **public beta** in June 2026 ([docs
 | Close code | Meaning | Client reaction |
 |---|---|---|
 | `1001` | Server restarting (deploy) | Reconnect with backoff |
-| `4401` | Missing/expired/invalid token | Fetch a new token, reconnect |
+| HTTP **401** / `4401` | Missing/expired/invalid token | Server rejects at upgrade (401) or WS close; client refreshes token (capped retries) |
 | `4403` | Token not valid for this room | Show "Access denied" |
 | `4408` | Rate limited | Wait 5 s, reconnect |
 | `4429` | Room full | Show "Room is full" |
