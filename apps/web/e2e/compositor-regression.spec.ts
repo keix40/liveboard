@@ -44,6 +44,13 @@ async function waitForInkAtLeast(page: Page, target: number, toleranceRatio = 0.
   await expect.poll(async () => inkPixels(page), { timeout: 15_000 }).toBeGreaterThanOrEqual(lo);
 }
 
+async function disableShapeSnap(page: Page) {
+  const toggle = page.getByTestId("shape-recognize-toggle");
+  if (await toggle.isChecked()) {
+    await toggle.uncheck();
+  }
+}
+
 test("remote viewer keeps prior strokes visible while new strokes stream in", async ({ browser }) => {
   const room = `reg-a-${Date.now()}`;
   const a = await (await browser.newContext()).newPage();
@@ -52,6 +59,8 @@ test("remote viewer keeps prior strokes visible while new strokes stream in", as
   await b.goto(`/board/${room}`);
   await expect(a.getByTestId("status")).toHaveText(/connected/i);
   await expect(b.getByTestId("status")).toHaveText(/connected/i);
+  await disableShapeSnap(a);
+  await disableShapeSnap(b);
 
   const strokes: [number, number][][] = [
     [
