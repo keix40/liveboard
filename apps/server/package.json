@@ -1,0 +1,35 @@
+{
+  "name": "@liveboard/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "token": "tsx scripts/mint-token.ts",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@liveboard/shared": "workspace:*",
+    "ioredis": "^5.11.1",
+    "jose": "^6.2.12",
+    "lib0": "^0.2.119",
+    "pg": "^8.23.0",
+    "ws": "^8.22.0",
+    "y-protocols": "^1.0.7",
+    "yjs": "^13.6.33"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.23.1",
+    "@types/ws": "^8.18.2",
+    "tsx": "^4.23.15",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.11",
+    "y-websocket": "^3.1.0"
+  }
+}

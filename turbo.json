@@ -1,0 +1,63 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "globalEnv": [
+    "NODE_ENV"
+  ],
+  "tasks": {
+    "build": {
+      "dependsOn": [
+        "^build"
+      ],
+      "env": [
+        "NEXT_PUBLIC_*",
+        "LIVEBOARD_*"
+      ],
+      "outputs": [
+        "dist/**",
+        ".next/**",
+        "!.next/cache/**"
+      ]
+    },
+    "dev": {
+      "dependsOn": [
+        "^build"
+      ],
+      "cache": false,
+      "persistent": true
+    },
+    "typecheck": {
+      "dependsOn": [
+        "^build"
+      ]
+    },
+    "test": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": []
+    },
+    "lint": {},
+    "clean": {
+      "cache": false
+    }
+  },
+  "globalPassThroughEnv": [
+    "LIVEBOARD_*",
+    "NEXT_PUBLIC_*",
+    "PORT",
+    "HOST",
+    "PERSISTENCE",
+    "DATABASE_URL",
+    "REDIS_URL",
+    "ALLOWED_ORIGINS",
+    "LOG_LEVEL",
+    "COMPACT_EVERY_N_UPDATES",
+    "RATE_LIMIT_*",
+    "MAX_*",
+    "ROOM_IDLE_MS",
+    "HEARTBEAT_MS",
+    "UPGRADES_PER_IP_PER_MIN",
+    "INSTANCE_ID",
+    "CI"
+  ]
+}

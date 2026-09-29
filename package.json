@@ -1,0 +1,24 @@
+{
+  "name": "liveboard",
+  "private": true,
+  "description": "Multiplayer real-time whiteboard: Yjs CRDT sync over WebSockets, live cursors, offline-first.",
+  "license": "MIT",
+  "packageManager": "pnpm@10.34.6",
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "test:e2e": "pnpm --filter @liveboard/web test:e2e",
+    "lint": "turbo run lint",
+    "token": "pnpm --filter @liveboard/server token",
+    "clean": "turbo run clean && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "turbo": "^2.11.5",
+    "typescript": "~5.9.3"
+  }
+}
