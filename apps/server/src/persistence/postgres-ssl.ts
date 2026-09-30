@@ -1,28 +1,16 @@
 import type pg from "pg";
 
 /**
- * Map DATABASE_URL sslmode to node-postgres `ssl` (avoids deprecated implicit SSL parsing).
- * Supports Neon-style `sslmode=verify-full` and Render `require`.
+ * Map DATABASE_URL sslmode to an explicit node-postgres `ssl` option (avoids pg's deprecated
+ * implicit sslmode parsing). Any SSL mode keeps full certificate + hostname verification.
  */
 export function postgresSslOption(connectionString: string): pg.ConnectionConfig["ssl"] {
+  let mode = "";
   try {
-    const url = new URL(connectionString);
-    const mode = (url.searchParams.get("sslmode") ?? "").toLowerCase();
-    if (mode === "disable") return undefined;
-    if (mode === "verify-full" || mode === "verify-ca") {
-      return { rejectUnauthorized: true };
-    }
-    if (mode === "require" || mode === "prefer") {
-      return { rejectUnauthorized: false };
-    }
+    mode = (new URL(connectionString).searchParams.get("sslmode") ?? "").toLowerCase();
   } catch {
-    /* not a URL — fall through */
+    mode = (/sslmode=([a-z-]+)/i.exec(connectionString)?.[1] ?? "").toLowerCase();
   }
-  if (/sslmode=verify-full|sslmode=verify-ca/i.test(connectionString)) {
-    return { rejectUnauthorized: true };
-  }
-  if (/sslmode=require|render\.com|neon\.tech/i.test(connectionString)) {
-    return { rejectUnauthorized: /verify-full|verify-ca/i.test(connectionString) };
-  }
-  return undefined;
+  if (mode === "disable" || mode === "") return undefined;
+  return { rejectUnauthorized: true };
 }
