@@ -2,7 +2,14 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
-import { AUTO_SNAPSHOT_INTERVAL_MS, YKEYS, type Point, type RoomRole, type ShapeKind } from "@liveboard/shared";
+import {
+  AUTO_SNAPSHOT_INTERVAL_MS,
+  YKEYS,
+  pageSocialKey,
+  type Point,
+  type RoomRole,
+  type ShapeKind,
+} from "@liveboard/shared";
 import { useRoom } from "@/lib/useRoom";
 import {
   beginStroke,
@@ -58,6 +65,11 @@ import { restorePageSnapshot, type PageSnapshot } from "@/lib/pages";
 import { getComments, type PinnedComment } from "@/lib/comments";
 import { getReactions, type BoardReaction } from "@/lib/reactions";
 import { createStrokeHoldSession } from "@/lib/stroke-hold";
+
+/** Peeked social maps are detached placeholders until created; skip them to avoid Yjs premature-access warnings. */
+function boundOrEmpty<T>(doc: Y.Doc, map: Y.Map<T>): Map<string, T> | Y.Map<T> {
+  return isBoundToDoc(doc, map) ? map : new Map<string, T>();
+}
 
 const STATUS_LABEL: Record<string, string> = {
   connected: "● Connected",
@@ -304,11 +316,20 @@ export function Whiteboard({
 
   const [reactionsRevision, setReactionsRevision] = useState(0);
   const [commentsRevision, setCommentsRevision] = useState(0);
+  const socialBound = doc
+    ? `${doc.share.has(pageSocialKey("comments", activePageId))}|${doc.share.has(pageSocialKey("reactions", activePageId))}`
+    : "";
+  const commentPlacementSeed = useMemo(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const w = screenToWorld(camera, canvas.clientWidth / 2, canvas.clientHeight / 2);
+    return { x: w.x, y: w.y };
+  }, [camera, metaRevision]);
   const panelComments = useMemo(() => {
     if (!doc) return [];
     void commentsRevision;
     const out: { id: string; text: string; x: number; y: number }[] = [];
-    getComments(doc, activePageId).forEach((m, id) => {
+    boundOrEmpty(doc, getComments(doc, activePageId)).forEach((m, id) => {
       if (m instanceof Y.Map) {
         out.push({
           id,
@@ -319,7 +340,7 @@ export function Whiteboard({
       }
     });
     return out;
-  }, [doc, commentsRevision, activePageId]);
+  }, [doc, commentsRevision, activePageId, socialBound]);
 
   const buildRenderOpts = useCallback(() => {
     const canvas = canvasRef.current!;
@@ -328,7 +349,7 @@ export function Whiteboard({
     const reactions: BoardReaction[] = [];
     const comments: PinnedComment[] = [];
     if (doc) {
-      getReactions(doc, activePageId).forEach((m) => {
+      boundOrEmpty(doc, getReactions(doc, activePageId)).forEach((m) => {
         if (m instanceof Y.Map) {
           reactions.push({
             id: String(m.get("id")),
@@ -341,7 +362,7 @@ export function Whiteboard({
           });
         }
       });
-      getComments(doc, activePageId).forEach((m) => {
+      boundOrEmpty(doc, getComments(doc, activePageId)).forEach((m) => {
         if (m instanceof Y.Map) {
           comments.push({
             id: String(m.get("id")),
@@ -394,6 +415,7 @@ export function Whiteboard({
     reactionsRevision,
     commentsRevision,
     activePageId,
+    socialBound,
   ]);
 
   const paintFrame = useCallback(
@@ -435,7 +457,8 @@ export function Whiteboard({
     const pagesMap = doc.share.has(YKEYS.pages) ? doc.getMap(YKEYS.pages) : null;
     const onPagesDeep = () => setMetaRevision((n) => n + 1);
     pagesMap?.observeDeep(onPagesDeep);
-    const contentKeys = () => new Set([...doc.share.keys()].filter((k) => /^(strokes|shapes|notes|assets)(:|$)/.test(k)));
+    const contentKeys = () =>
+      new Set([...doc.share.keys()].filter((k) => /^(strokes|shapes|notes|assets|comments|reactions)(:|$)/.test(k)));
     let seenContent = contentKeys();
     const onDocChange = () => {
       const next = contentKeys();
@@ -534,7 +557,7 @@ export function Whiteboard({
     return () => {
       for (const fn of cleanups) fn();
     };
-  }, [boundStrokes, boundShapes, boundNotes, boundAssets, doc, scheduleFrame, activePageId]);
+  }, [boundStrokes, boundShapes, boundNotes, boundAssets, doc, scheduleFrame, activePageId, socialBound]);
 
   useEffect(() => {
     if (!doc || !contentPreview) {
@@ -586,14 +609,14 @@ export function Whiteboard({
           if (prev.size === next.size && [...next.keys()].every((k) => prev.get(k) === next.get(k))) return prev;
           return next;
         });
-        setAssetRevision((n) => n + 1);
+        scheduleFrame(true);
       }
     };
     void load();
     return () => {
       cancelled = true;
     };
-  }, [boundAssets, assetRevision]);
+  }, [boundAssets, scheduleFrame]);
 
   useEffect(() => {
     if (!doc || readOnly) return;
@@ -1264,6 +1287,7 @@ export function Whiteboard({
           size={size}
           zoom={camera.zoom}
           compact={compactToolbar}
+          darkMode={boardMeta?.darkMode ?? false}
           readOnly={readOnly}
           statusChip={
             compactToolbar ? (
@@ -1386,6 +1410,7 @@ export function Whiteboard({
             shareLinks={shareLinks}
             editAccessBanner={editAccessBanner}
             comments={panelComments}
+            commentPlacementSeed={commentPlacementSeed}
             className={compactToolbar && !sidePanelOpen ? "collapsed" : undefined}
             onClosePanel={compactToolbar && sidePanelOpen ? () => setSidePanelOpen(false) : undefined}
             history={listHistorySnapshots(doc)}

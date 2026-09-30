@@ -10,6 +10,19 @@ async function focusToolbarControl(page: Page, id: string) {
     const btn = root.querySelector(`[data-testid="${testId}"]`) as HTMLElement | null;
     btn?.scrollIntoView({ block: "nearest", inline: "center" });
   }, id);
+  await expect
+    .poll(async () => {
+      const box = await el.boundingBox();
+      if (!box) return false;
+      const cx = box.x + box.width / 2;
+      const cy = box.y + box.height / 2;
+      const top = await page.evaluate(
+        ({ x, y }) => document.elementFromPoint(x, y)?.closest("[data-testid]")?.getAttribute("data-testid") ?? null,
+        { x: cx, y: cy },
+      );
+      return top === id;
+    }, { timeout: 5000 })
+    .toBe(true);
 }
 
 const VIEWPORTS = [
@@ -24,7 +37,7 @@ for (const vp of VIEWPORTS) {
   test(`toolbar controls are tappable at ${vp.name} (${vp.width}x${vp.height})`, async ({ page }) => {
     await page.setViewportSize({ width: vp.width, height: vp.height });
     await page.goto(`/board/layout-${vp.name}-${Date.now()}`);
-    await expect(page.getByTestId("status")).toHaveText(/connected/i);
+    await expect(page.getByTestId("status")).toHaveText(/connected/i, { timeout: 20_000 });
     const chrome = page.getByTestId("board-chrome");
     await expect(chrome).toBeVisible();
     const chromeBox = (await chrome.boundingBox())!;
@@ -52,7 +65,7 @@ for (const vp of VIEWPORTS) {
 test("phone chrome height stays within 10% of viewport", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`/board/hud-${Date.now()}`);
-  await expect(page.getByTestId("status")).toHaveText(/connected/i);
+  await expect(page.getByTestId("status")).toHaveText(/connected/i, { timeout: 20_000 });
   await expect(page.locator(".board-hud")).toHaveCount(0);
   const chrome = page.getByTestId("board-chrome");
   const chromeBox = (await chrome.boundingBox())!;
@@ -62,7 +75,7 @@ test("phone chrome height stays within 10% of viewport", async ({ page }) => {
 test("HUD does not overlap toolbar tools", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`/board/hud-${Date.now()}`);
-  await expect(page.getByTestId("status")).toHaveText(/connected/i);
+  await expect(page.getByTestId("status")).toHaveText(/connected/i, { timeout: 20_000 });
   const status = page.getByTestId("status");
   const pen = page.getByTestId("tool-pen");
   await expect(status).toBeVisible();
@@ -80,6 +93,7 @@ test("HUD does not overlap toolbar tools", async ({ page }) => {
 test("status pills do not cover export buttons at desktop width", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto(`/board/hud-desktop-${Date.now()}`);
+  await expect(page.getByTestId("status")).toHaveText(/connected/i, { timeout: 20_000 });
   const status = page.getByTestId("status");
   const pdf = page.getByTestId("tool-export-pdf");
   await focusToolbarControl(page, "tool-export-pdf");

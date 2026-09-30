@@ -104,8 +104,12 @@ button { font: inherit; cursor: pointer; }
   align-items: center;
   justify-content: space-between;
   margin-bottom: 8px;
-  padding-bottom: 8px;
+  padding: 8px 0;
   border-bottom: 1px solid #e2e8f0;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: inherit;
 }
 
 .side-panel-title {
@@ -176,9 +180,12 @@ button { font: inherit; cursor: pointer; }
 }
 
 .side-check input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  min-height: 20px;
   accent-color: #2563eb;
+  flex-shrink: 0;
 }
 
 .side-select {
@@ -372,6 +379,11 @@ button { font: inherit; cursor: pointer; }
     border-top: 1px solid #e2e8f0;
     border-radius: 16px 16px 0 0;
     box-shadow: 0 -8px 32px rgb(15 23 42 / 0.18);
+  }
+
+  /* Let the sheet scroll instead of flex-shrinking (and clipping) its sections. */
+  .board-side-panel.sheet-open > * {
+    flex-shrink: 0;
   }
 }
 

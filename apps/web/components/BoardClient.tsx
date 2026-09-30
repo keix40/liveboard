@@ -32,19 +32,33 @@ export function BoardClient({ roomId }: { roomId: string }) {
   }, [roomId, params]);
 
   useEffect(() => {
-    if (!showShare) return;
+    const origin = window.location.origin;
+    let editLink = "";
+    let viewLink = "";
     try {
       const raw = sessionStorage.getItem(`liveboard:share:${roomId}`);
       if (raw) {
         const parsed = JSON.parse(raw) as { editLink?: string; viewLink?: string };
-        if (parsed.editLink && parsed.viewLink) {
-          setShareLinks({ editLink: parsed.editLink, viewLink: parsed.viewLink });
-        }
+        if (parsed.editLink) editLink = parsed.editLink;
+        if (parsed.viewLink) viewLink = parsed.viewLink;
       }
     } catch {
       /* ignore */
     }
-  }, [showShare, roomId]);
+    const cap = editCapResolved || loadStoredEditCap(roomId);
+    if (cap) {
+      editLink = `${origin}/board/${roomId}#edit=${encodeURIComponent(cap)}`;
+    }
+    const vc = params.get("viewCap") ?? "";
+    if (vc) {
+      viewLink = `${origin}/board/${roomId}?view=1&viewCap=${encodeURIComponent(vc)}`;
+    }
+    if (showShare && !editLink && !viewLink) return;
+    if (editLink && viewLink) setShareLinks({ editLink, viewLink });
+    else if (editLink || viewLink) {
+      setShareLinks({ editLink: editLink || viewLink, viewLink: viewLink || editLink });
+    }
+  }, [showShare, roomId, editCapResolved, params]);
 
   if (passwordRequired) {
     return (

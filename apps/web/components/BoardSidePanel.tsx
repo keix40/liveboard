@@ -44,6 +44,7 @@ interface Props {
   shareLinks?: { editLink: string; viewLink: string } | null;
   editAccessBanner?: string | null;
   comments?: { id: string; text: string; x: number; y: number }[];
+  commentPlacementSeed?: { x: number; y: number };
   onClosePanel?(): void;
 }
 
@@ -191,7 +192,7 @@ export function BoardSidePanel(p: Props) {
               </button>
             </div>
           ) : (
-            <p className="side-muted">Share links appear when the room is connected.</p>
+            <p className="side-muted">Share links appear once edit or view access is available on this device.</p>
           )}
         </SideSection>
 
@@ -441,10 +442,12 @@ export function BoardSidePanel(p: Props) {
                 hidden
                 disabled={p.readOnly}
                 data-testid="import-image"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) void importImage(f);
-                }}
+            onChange={(e) => {
+              const input = e.currentTarget;
+              const f = input.files?.[0];
+              if (f) void importImage(f);
+              input.value = "";
+            }}
               />
             </label>
             <label className="side-btn side-file">
@@ -459,6 +462,7 @@ export function BoardSidePanel(p: Props) {
                   const f = e.target.files?.[0];
                   if (!f) return;
                   void (async () => {
+                    const input = e.currentTarget;
                     setImportError(null);
                     try {
                       const pages = await renderPdfPagesToDataUrls(f);
@@ -485,6 +489,8 @@ export function BoardSidePanel(p: Props) {
                       p.onMetaRevision();
                     } catch (err) {
                       setImportError(err instanceof Error ? err.message : "PDF import failed");
+                    } finally {
+                      input.value = "";
                     }
                   })();
                 }}
@@ -518,9 +524,19 @@ export function BoardSidePanel(p: Props) {
               disabled={p.readOnly}
               onClick={() => {
                 const text = prompt("Pinned comment") ?? "Note";
+                const n = p.comments?.length ?? 0;
+                const seed = p.commentPlacementSeed ?? { x: 0, y: 0 };
+                const col = n % 4;
+                const row = Math.floor(n / 4);
                 addComment(
                   p.doc,
-                  { x: 240, y: 240, text, pinned: true, authorId: p.authorId },
+                  {
+                    x: seed.x + col * 36,
+                    y: seed.y + row * 32,
+                    text,
+                    pinned: true,
+                    authorId: p.authorId,
+                  },
                   p.activePageId,
                 );
               }}
