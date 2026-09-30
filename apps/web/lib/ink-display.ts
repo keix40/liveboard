@@ -16,3 +16,14 @@ export function inkOnCanvas(stored: string, darkMode: boolean): string {
   if (NEAR_BLACK.has(n)) return "#f8fafc";
   return stored;
 }
+
+/** Display-only shape fill (preserves 8-digit hex alpha suffix). */
+export function inkOnCanvasFill(stored: string | null, darkMode: boolean): string | null {
+  if (stored == null) return null;
+  if (!darkMode) return stored;
+  const nine = stored.match(/^#([0-9a-fA-F]{6})([0-9a-fA-F]{2})$/);
+  if (nine) {
+    return inkOnCanvas(`#${nine[1]!}`, true) + nine[2]!.toLowerCase();
+  }
+  return inkOnCanvas(stored, darkMode);
+}

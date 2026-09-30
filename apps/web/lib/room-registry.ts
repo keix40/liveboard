@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import pg from "pg";
+import { postgresPoolConfig } from "./postgres-ssl";
 
 export interface RoomRegistryRow {
   roomId: string;
@@ -16,7 +17,7 @@ function getPool(): pg.Pool | null {
   const url = process.env.DATABASE_URL;
   if (!url) return null;
   if (!pool) {
-    pool = new pg.Pool({ connectionString: url, max: 4 });
+    pool = new pg.Pool(postgresPoolConfig(url));
   }
   return pool;
 }

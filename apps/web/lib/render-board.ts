@@ -8,7 +8,8 @@ import type { BoardAsset } from "./assets";
 import type { BoardReaction } from "./reactions";
 import type { PinnedComment } from "./comments";
 import { arrowHeadLength, arrowShaftEnd } from "./shape-geometry";
-import { inkOnCanvas } from "./ink-display";
+import { inkOnCanvas, inkOnCanvasFill } from "./ink-display";
+import { truncateCommentLabel } from "./comment-layout";
 
 export interface RenderBoardOpts {
   camera: Camera;
@@ -46,11 +47,11 @@ function drawArrowHead(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2
   ctx.fill();
 }
 
-function drawShape(ctx: CanvasRenderingContext2D, s: ReturnType<typeof readShape>): void {
+function drawShape(ctx: CanvasRenderingContext2D, s: ReturnType<typeof readShape>, darkMode: boolean): void {
   ctx.save();
-  ctx.strokeStyle = s.stroke;
+  ctx.strokeStyle = inkOnCanvas(s.stroke, darkMode);
   ctx.lineWidth = s.strokeWidth;
-  ctx.fillStyle = s.fill ?? "transparent";
+  ctx.fillStyle = inkOnCanvasFill(s.fill, darkMode) ?? "transparent";
   const x2 = s.x + s.w;
   const y2 = s.y + s.h;
   switch (s.kind) {
@@ -78,13 +79,13 @@ function drawShape(ctx: CanvasRenderingContext2D, s: ReturnType<typeof readShape
       ctx.moveTo(s.x, s.y);
       ctx.lineTo(base.x, base.y);
       ctx.stroke();
-      ctx.fillStyle = s.stroke;
+      ctx.fillStyle = inkOnCanvas(s.stroke, darkMode);
       drawArrowHead(ctx, s.x, s.y, x2, y2, headLen);
       break;
     }
     case "text":
       ctx.font = `${Math.max(14, s.h)}px ui-sans-serif, system-ui, sans-serif`;
-      ctx.fillStyle = s.stroke;
+      ctx.fillStyle = inkOnCanvas(s.stroke, darkMode);
       ctx.textBaseline = "top";
       ctx.fillText(s.text ?? "Text", s.x, s.y);
       break;
@@ -198,7 +199,7 @@ export function renderBoardBase(ctx: CanvasRenderingContext2D, opts: RenderBoard
   }
 
   const shapeList = [...shapes.values()].map(readShape).sort((a, b) => a.z - b.z);
-  for (const sh of shapeList) drawShape(ctx, sh);
+  for (const sh of shapeList) drawShape(ctx, sh, darkMode);
 
   for (const n of [...notes.values()].map(readNote).sort((a, b) => a.z - b.z)) {
     ctx.fillStyle = n.color;
@@ -239,21 +240,25 @@ export function renderBoardOverlay(ctx: CanvasRenderingContext2D, opts: RenderBo
   }
 
   if (previewShape) {
-    drawShape(ctx, {
-      id: "preview",
-      kind: previewShape.kind as "rect",
-      x: previewShape.x,
-      y: previewShape.y,
-      w: previewShape.w,
-      h: previewShape.h,
-      rotation: 0,
-      stroke: previewShape.stroke,
-      fill: null,
-      strokeWidth: previewShape.strokeWidth,
-      z: 0,
-      authorId: "",
-      createdAt: 0,
-    });
+    drawShape(
+      ctx,
+      {
+        id: "preview",
+        kind: previewShape.kind as "rect",
+        x: previewShape.x,
+        y: previewShape.y,
+        w: previewShape.w,
+        h: previewShape.h,
+        rotation: 0,
+        stroke: previewShape.stroke,
+        fill: null,
+        strokeWidth: previewShape.strokeWidth,
+        z: 0,
+        authorId: "",
+        createdAt: 0,
+      },
+      darkMode,
+    );
   }
 
   if (lassoPath && lassoPath.length > 1) {
@@ -287,8 +292,8 @@ export function renderBoardOverlay(ctx: CanvasRenderingContext2D, opts: RenderBo
   if (opts.comments?.length) {
     ctx.font = "12px system-ui, sans-serif";
     ctx.fillStyle = opts.darkMode ? "#f8fafc" : "#0f172a";
-    for (const c of opts.comments) {
-      if (!c.pinned) continue;
+    opts.comments.forEach((c, index) => {
+      if (!c.pinned) return;
       ctx.fillStyle = opts.darkMode ? "#1e293b" : "#ffffff";
       ctx.strokeStyle = opts.darkMode ? "#64748b" : "#94a3b8";
       ctx.lineWidth = 1 / camera.zoom;
@@ -300,12 +305,16 @@ export function renderBoardOverlay(ctx: CanvasRenderingContext2D, opts: RenderBo
       ctx.font = `${10 / camera.zoom}px system-ui, sans-serif`;
       ctx.textAlign = "center";
       ctx.fillText("💬", c.x + w / 2, c.y + h / 2);
-      const label = c.text.length > 48 ? `${c.text.slice(0, 45)}…` : c.text;
+      const label = truncateCommentLabel(c.text, 28);
+      const labelCol = index % 3;
+      const labelRow = Math.floor(index / 3);
+      const labelX = c.x + labelCol * (120 / camera.zoom);
+      const labelY = c.y + h + (14 + labelRow * 16) / camera.zoom;
       ctx.textAlign = "left";
       ctx.font = `${11 / camera.zoom}px system-ui, sans-serif`;
       ctx.fillStyle = opts.darkMode ? "#e2e8f0" : "#334155";
-      ctx.fillText(label, c.x, c.y + h + 14 / camera.zoom);
-    }
+      ctx.fillText(label, labelX, labelY);
+    });
   }
 
   if (selection && selection.length > 0) {

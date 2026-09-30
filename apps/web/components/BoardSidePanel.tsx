@@ -12,6 +12,7 @@ import { renderPdfPagesToDataUrls } from "@/lib/pdf-import";
 import { addReaction } from "@/lib/reactions";
 import { addComment } from "@/lib/comments";
 import { LOCAL_ORIGIN } from "@/lib/strokes";
+import { commentPinPosition, truncateCommentLabel } from "@/lib/comment-layout";
 
 interface Props {
   doc: Y.Doc;
@@ -526,13 +527,12 @@ export function BoardSidePanel(p: Props) {
                 const text = prompt("Pinned comment") ?? "Note";
                 const n = p.comments?.length ?? 0;
                 const seed = p.commentPlacementSeed ?? { x: 0, y: 0 };
-                const col = n % 4;
-                const row = Math.floor(n / 4);
+                const pin = commentPinPosition(seed, n);
                 addComment(
                   p.doc,
                   {
-                    x: seed.x + col * 36,
-                    y: seed.y + row * 32,
+                    x: pin.x,
+                    y: pin.y,
                     text,
                     pinned: true,
                     authorId: p.authorId,
@@ -547,8 +547,8 @@ export function BoardSidePanel(p: Props) {
           {p.comments && p.comments.length > 0 ? (
             <ul className="side-list comment-list" data-testid="comment-list">
               {p.comments.map((c) => (
-                <li key={c.id}>
-                  <strong>{c.text.slice(0, 80)}</strong>
+                <li key={c.id} title={c.text}>
+                  <strong>{truncateCommentLabel(c.text, 80)}</strong>
                   <span className="comment-coords">
                     ({Math.round(c.x)}, {Math.round(c.y)})
                   </span>

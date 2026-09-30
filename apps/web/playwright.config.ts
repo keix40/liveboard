@@ -39,6 +39,7 @@ export default defineConfig({
         LIVEBOARD_INTERNAL_SECRET:
           process.env.LIVEBOARD_INTERNAL_SECRET ?? "test-internal-secret-test-internal-sec",
         PERSISTENCE: "memory",
+        UPGRADES_PER_IP_PER_MIN: process.env.UPGRADES_PER_IP_PER_MIN ?? "600",
       },
     },
     {
