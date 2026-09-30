@@ -219,8 +219,10 @@ export {
   DEFAULT_PAGE_ID,
   allPageContentKeys,
   pageContentKey,
+  pageSocialKey,
   pageIdFromContentKey,
   type PageContentKind,
+  type PageSocialKind,
 } from "./page-keys.js";
 
 export interface HealthResponse {

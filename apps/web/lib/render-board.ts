@@ -261,7 +261,15 @@ export function renderBoardOverlay(ctx: CanvasRenderingContext2D, opts: RenderBo
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     for (const r of opts.reactions) {
-      ctx.fillText(r.emoji, r.x, r.y);
+      const count = r.count ?? 1;
+      if (count > 1) {
+        ctx.fillText(r.emoji, r.x, r.y);
+        ctx.font = `${10 / camera.zoom}px system-ui, sans-serif`;
+        ctx.fillText(String(count), r.x + 10 / camera.zoom, r.y - 8 / camera.zoom);
+        ctx.font = `${16 / camera.zoom}px system-ui, sans-serif`;
+      } else {
+        ctx.fillText(r.emoji, r.x, r.y);
+      }
     }
   }
   if (opts.comments?.length) {

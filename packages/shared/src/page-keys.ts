@@ -3,6 +3,7 @@
 export const DEFAULT_PAGE_ID = "page-1";
 
 export type PageContentKind = "strokes" | "shapes" | "notes" | "assets";
+export type PageSocialKind = "comments" | "reactions";
 
 const LEGACY: Record<PageContentKind, string> = {
   strokes: "strokes",
@@ -27,6 +28,11 @@ export function allPageContentKeys(docShareKeys: Iterable<string>): string[] {
     }
   }
   return [...keys];
+}
+
+export function pageSocialKey(kind: PageSocialKind, pageId: string): string {
+  if (pageId === DEFAULT_PAGE_ID) return kind;
+  return `${kind}:${pageId}`;
 }
 
 export function pageIdFromContentKey(key: string, kind: PageContentKind): string | null {
