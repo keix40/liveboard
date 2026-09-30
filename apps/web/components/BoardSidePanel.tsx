@@ -45,7 +45,7 @@ interface Props {
   shareLinks?: { editLink: string; viewLink: string } | null;
   editAccessBanner?: string | null;
   comments?: { id: string; text: string; x: number; y: number }[];
-  commentPlacementSeed?: { x: number; y: number };
+  getCommentSeed(): { x: number; y: number };
   onClosePanel?(): void;
 }
 
@@ -526,7 +526,7 @@ export function BoardSidePanel(p: Props) {
               onClick={() => {
                 const text = prompt("Pinned comment") ?? "Note";
                 const n = p.comments?.length ?? 0;
-                const seed = p.commentPlacementSeed ?? { x: 0, y: 0 };
+                const seed = p.getCommentSeed();
                 const pin = commentPinPosition(seed, n);
                 addComment(
                   p.doc,

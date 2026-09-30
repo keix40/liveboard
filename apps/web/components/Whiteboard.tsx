@@ -65,6 +65,7 @@ import { restorePageSnapshot, type PageSnapshot } from "@/lib/pages";
 import { getComments, type PinnedComment } from "@/lib/comments";
 import { getReactions, type BoardReaction } from "@/lib/reactions";
 import { createStrokeHoldSession } from "@/lib/stroke-hold";
+import { viewportCommentSeed } from "@/lib/comment-layout";
 
 /** Peeked social maps are detached placeholders until created; skip them to avoid Yjs premature-access warnings. */
 function boundOrEmpty<T>(doc: Y.Doc, map: Y.Map<T>): Map<string, T> | Y.Map<T> {
@@ -319,12 +320,12 @@ export function Whiteboard({
   const socialBound = doc
     ? `${doc.share.has(pageSocialKey("comments", activePageId))}|${doc.share.has(pageSocialKey("reactions", activePageId))}`
     : "";
-  const commentPlacementSeed = useMemo(() => {
+  const getCommentSeed = useCallback(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-    const w = screenToWorld(camera, canvas.clientWidth / 2, canvas.clientHeight / 2);
-    return { x: w.x, y: w.y };
-  }, [camera, metaRevision]);
+    const w = canvas?.clientWidth ?? 0;
+    const h = canvas?.clientHeight ?? 0;
+    return viewportCommentSeed(camera, w, h);
+  }, [camera]);
   const panelComments = useMemo(() => {
     if (!doc) return [];
     void commentsRevision;
@@ -1422,7 +1423,7 @@ export function Whiteboard({
             shareLinks={shareLinks}
             editAccessBanner={editAccessBanner}
             comments={panelComments}
-            commentPlacementSeed={commentPlacementSeed}
+            getCommentSeed={getCommentSeed}
             className={compactToolbar && !sidePanelOpen ? "collapsed" : undefined}
             onClosePanel={compactToolbar && sidePanelOpen ? () => setSidePanelOpen(false) : undefined}
             history={listHistorySnapshots(doc)}
