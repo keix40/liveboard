@@ -1,11 +1,12 @@
 import pg from "pg";
+import { postgresPoolConfig } from "./postgres-ssl";
 
 let pool: pg.Pool | null = null;
 
 function getPool(): pg.Pool | null {
   const url = process.env.DATABASE_URL;
   if (!url) return null;
-  if (!pool) pool = new pg.Pool({ connectionString: url, max: 4 });
+  if (!pool) pool = new pg.Pool(postgresPoolConfig(url));
   return pool;
 }
 

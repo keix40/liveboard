@@ -342,6 +342,17 @@ export function Whiteboard({
     return out;
   }, [doc, commentsRevision, activePageId, socialBound]);
 
+  const maxReactionCount = useMemo(() => {
+    if (!doc) return 0;
+    void reactionsRevision;
+    void socialBound;
+    let max = 0;
+    boundOrEmpty(doc, getReactions(doc, activePageId)).forEach((m) => {
+      if (m instanceof Y.Map) max = Math.max(max, Number(m.get("count") ?? 1));
+    });
+    return max;
+  }, [doc, activePageId, reactionsRevision, socialBound]);
+
   const buildRenderOpts = useCallback(() => {
     const canvas = canvasRef.current!;
     const dpr = window.devicePixelRatio || 1;
@@ -541,11 +552,11 @@ export function Whiteboard({
       setCommentsRevision((n) => n + 1);
       scheduleFrame(true);
     };
-    if (isBoundToDoc(doc, reactionsMap)) reactionsMap.observe(onSocial);
-    if (isBoundToDoc(doc, commentsMap)) commentsMap.observe(onSocial);
+    if (isBoundToDoc(doc, reactionsMap)) reactionsMap.observeDeep(onSocial);
+    if (isBoundToDoc(doc, commentsMap)) commentsMap.observeDeep(onSocial);
     cleanups.push(() => {
-      if (isBoundToDoc(doc, reactionsMap)) reactionsMap.unobserve(onSocial);
-      if (isBoundToDoc(doc, commentsMap)) commentsMap.unobserve(onSocial);
+      if (isBoundToDoc(doc, reactionsMap)) reactionsMap.unobserveDeep(onSocial);
+      if (isBoundToDoc(doc, commentsMap)) commentsMap.unobserveDeep(onSocial);
     });
 
     const metaMap = doc.share.has(YKEYS.meta) ? doc.getMap(YKEYS.meta) : null;
@@ -1350,6 +1361,7 @@ export function Whiteboard({
             boundShapes ? boundShapes.size : shapeCount
           }
           data-asset-count={boundAssets?.size ?? 0}
+          data-max-reaction-count={maxReactionCount}
           data-camera={`${camera.x},${camera.y},${camera.zoom}`}
           style={{ cursor: cursorStyle, touchAction: "none" }}
           onPointerDown={onPointerDown}
