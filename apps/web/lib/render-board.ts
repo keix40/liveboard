@@ -9,7 +9,8 @@ import type { BoardReaction } from "./reactions";
 import type { PinnedComment } from "./comments";
 import { arrowHeadLength, arrowShaftEnd } from "./shape-geometry";
 import { inkOnCanvas, inkOnCanvasFill } from "./ink-display";
-import { truncateCommentLabel } from "./comment-layout";
+import { layoutPinnedCommentLabels, truncateCommentLabel } from "./comment-layout";
+import { reactionCountBadgeStyle } from "./reaction-badge-theme";
 
 export interface RenderBoardOpts {
   camera: Camera;
@@ -274,26 +275,46 @@ export function renderBoardOverlay(ctx: CanvasRenderingContext2D, opts: RenderBo
   }
 
   if (opts.reactions?.length) {
+    const badge = reactionCountBadgeStyle(opts.darkMode ?? false);
     ctx.font = `${16 / camera.zoom}px system-ui, sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     for (const r of opts.reactions) {
       const count = r.count ?? 1;
+      ctx.fillText(r.emoji, r.x, r.y);
       if (count > 1) {
-        ctx.fillText(r.emoji, r.x, r.y);
-        ctx.font = `${10 / camera.zoom}px system-ui, sans-serif`;
-        ctx.fillText(String(count), r.x + 10 / camera.zoom, r.y - 8 / camera.zoom);
+        const countText = String(count);
+        const fontSize = 10 / camera.zoom;
+        const pad = 3 / camera.zoom;
+        ctx.font = `${fontSize}px system-ui, sans-serif`;
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        const bx = r.x + 10 / camera.zoom;
+        const by = r.y - 8 / camera.zoom;
+        const tw = ctx.measureText(countText).width;
+        const pillH = fontSize + pad * 2;
+        const pillW = tw + pad * 2;
+        ctx.fillStyle = badge.pillBg;
+        if (typeof ctx.roundRect === "function") {
+          ctx.beginPath();
+          ctx.roundRect(bx - pad, by - pillH / 2, pillW, pillH, 4 / camera.zoom);
+          ctx.fill();
+        } else {
+          ctx.fillRect(bx - pad, by - pillH / 2, pillW, pillH);
+        }
+        ctx.fillStyle = badge.pillText;
+        ctx.fillText(countText, bx, by);
+        ctx.textAlign = "center";
         ctx.font = `${16 / camera.zoom}px system-ui, sans-serif`;
-      } else {
-        ctx.fillText(r.emoji, r.x, r.y);
       }
     }
   }
   if (opts.comments?.length) {
+    const pinned = opts.comments.filter((c) => c.pinned);
+    const labelLayouts = layoutPinnedCommentLabels(pinned, camera.zoom);
     ctx.font = "12px system-ui, sans-serif";
     ctx.fillStyle = opts.darkMode ? "#f8fafc" : "#0f172a";
-    opts.comments.forEach((c, index) => {
-      if (!c.pinned) return;
+    for (const c of pinned) {
       ctx.fillStyle = opts.darkMode ? "#1e293b" : "#ffffff";
       ctx.strokeStyle = opts.darkMode ? "#64748b" : "#94a3b8";
       ctx.lineWidth = 1 / camera.zoom;
@@ -302,19 +323,28 @@ export function renderBoardOverlay(ctx: CanvasRenderingContext2D, opts: RenderBo
       ctx.fillRect(c.x, c.y, w, h);
       ctx.strokeRect(c.x, c.y, w, h);
       ctx.fillStyle = opts.darkMode ? "#e2e8f0" : "#0f172a";
-      ctx.font = `${10 / camera.zoom}px system-ui, sans-serif`;
+      ctx.font = `${String(10 / camera.zoom)}px system-ui, sans-serif`;
       ctx.textAlign = "center";
-      ctx.fillText("💬", c.x + w / 2, c.y + h / 2);
+      ctx.textBaseline = "middle";
+      ctx.fillText("\u{1F4AC}", c.x + w / 2, c.y + h / 2);
+
+      const layout = labelLayouts.get(c.id);
+      if (!layout) continue;
       const label = truncateCommentLabel(c.text, 28);
-      const labelCol = index % 3;
-      const labelRow = Math.floor(index / 3);
-      const labelX = c.x + labelCol * (120 / camera.zoom);
-      const labelY = c.y + h + (14 + labelRow * 16) / camera.zoom;
+      if (layout.showLeader) {
+        ctx.strokeStyle = opts.darkMode ? "#94a3b8" : "#64748b";
+        ctx.lineWidth = 1 / camera.zoom;
+        ctx.beginPath();
+        ctx.moveTo(layout.anchorX, layout.anchorY);
+        ctx.lineTo(layout.labelX, layout.labelY + layout.labelH / 2);
+        ctx.stroke();
+      }
       ctx.textAlign = "left";
+      ctx.textBaseline = "top";
       ctx.font = `${11 / camera.zoom}px system-ui, sans-serif`;
       ctx.fillStyle = opts.darkMode ? "#e2e8f0" : "#334155";
-      ctx.fillText(label, labelX, labelY);
-    });
+      ctx.fillText(label, layout.labelX, layout.labelY);
+    }
   }
 
   if (selection && selection.length > 0) {
