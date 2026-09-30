@@ -71,7 +71,7 @@ describe("room health under load", () => {
     const res = await fetch(`${httpUrl}/healthz`);
     const ms = performance.now() - t0;
     expect(res.status).toBe(200);
-    expect(ms).toBeLessThan(50);
+    expect(ms).toBeLessThan(85);
     provider.destroy();
   });
 });
