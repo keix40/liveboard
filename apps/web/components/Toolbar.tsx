@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import type { Tool } from "@liveboard/shared";
+import { inkOnCanvas } from "@/lib/ink-display";
 
 export type DrawTool = Tool;
 
@@ -14,6 +15,7 @@ interface Props {
   size: number;
   zoom: number;
   compact?: boolean;
+  darkMode?: boolean;
   readOnly?: boolean;
   statusChip?: ReactNode;
   onTool(t: DrawTool): void;
@@ -46,6 +48,7 @@ const TOOLS: { id: DrawTool; label: string }[] = [
 
 export function Toolbar(p: Props) {
   const ro = p.readOnly === true;
+  const dark = p.darkMode === true;
   return (
     <div className={`toolbar-scroll${p.compact ? " compact" : ""}`} data-testid="toolbar-scroll">
       <div className="toolbar" role="toolbar" aria-label="Drawing tools">
@@ -86,7 +89,7 @@ export function Toolbar(p: Props) {
             type="button"
             className="swatch"
             data-testid={`swatch-${c}`}
-            style={{ background: c }}
+            style={{ background: inkOnCanvas(c, dark) }}
             aria-label={`Color ${c}`}
             aria-pressed={p.color === c}
             disabled={ro}

@@ -1,5 +1,6 @@
 import * as Y from "yjs";
-import { YKEYS } from "@liveboard/shared";
+import { pageSocialKey } from "@liveboard/shared";
+import { resolvePageId } from "./page-model";
 import { LOCAL_ORIGIN } from "./strokes";
 
 export interface PinnedComment {
@@ -12,11 +13,28 @@ export interface PinnedComment {
   createdAt: number;
 }
 
-export function getComments(doc: Y.Doc): Y.Map<Y.Map<unknown>> {
-  return doc.getMap(YKEYS.comments);
+const EMPTY_COMMENTS = new Y.Map<Y.Map<unknown>>();
+
+export function readComments(doc: Y.Doc, pageId?: string): Y.Map<Y.Map<unknown>> {
+  const key = pageSocialKey("comments", resolvePageId(doc, pageId));
+  if (!doc.share.has(key)) return EMPTY_COMMENTS;
+  return doc.getMap(key);
 }
 
-export function addComment(doc: Y.Doc, c: Omit<PinnedComment, "id" | "createdAt">): void {
+export function writeComments(doc: Y.Doc, pageId?: string): Y.Map<Y.Map<unknown>> {
+  return doc.getMap(pageSocialKey("comments", resolvePageId(doc, pageId)));
+}
+
+/** @deprecated prefer readComments — kept for call sites that expect the name getComments */
+export function getComments(doc: Y.Doc, pageId?: string): Y.Map<Y.Map<unknown>> {
+  return readComments(doc, pageId);
+}
+
+export function addComment(
+  doc: Y.Doc,
+  c: Omit<PinnedComment, "id" | "createdAt">,
+  pageId?: string,
+): void {
   doc.transact(() => {
     const id = crypto.randomUUID();
     const m = new Y.Map<unknown>();
@@ -27,6 +45,6 @@ export function addComment(doc: Y.Doc, c: Omit<PinnedComment, "id" | "createdAt"
     m.set("pinned", c.pinned);
     m.set("authorId", c.authorId);
     m.set("createdAt", Date.now());
-    getComments(doc).set(id, m);
+    writeComments(doc, pageId).set(id, m);
   }, LOCAL_ORIGIN);
 }

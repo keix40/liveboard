@@ -60,6 +60,7 @@ export class Room {
   private updatesSinceCompaction = 0;
   private compacting = false;
   private destroyed = false;
+  private lastCapRemeasureMs = 0;
   private unsubscribe: () => Promise<void> = async () => {};
 
   private constructor(
@@ -168,7 +169,12 @@ export class Room {
           client.syncComplete = true;
           break;
         }
-        const gate = incomingUpdateAllowed(this.storage, update.byteLength);
+        const gate = incomingUpdateAllowed(this.storage, update.byteLength, {
+          doc: this.doc,
+          nowMs: Date.now(),
+          lastCapRemeasureMs: this.lastCapRemeasureMs,
+        });
+        if (gate.lastCapRemeasureMs != null) this.lastCapRemeasureMs = gate.lastCapRemeasureMs;
         if (!gate.ok) {
           this.deps.log.warn("dropped update", { roomId: this.id, reason: gate.reason, bytes: update.byteLength });
           const code = gate.reason === "room_storage_cap" ? CloseCode.RoomStorageCap : CloseCode.MessageTooBig;

@@ -6,6 +6,8 @@ export interface RoomStorageState {
   storedBytes: number;
 }
 
+export const ROOM_STORAGE_REMEASURE_THROTTLE_MS = 5000;
+
 export function measureDocBytes(doc: Y.Doc): number {
   return Y.encodeStateAsUpdate(doc).byteLength;
 }
@@ -14,18 +16,40 @@ export function rebaseRoomStorage(state: RoomStorageState, doc: Y.Doc): void {
   state.storedBytes = measureDocBytes(doc);
 }
 
-/** Budget check: rebased doc size + incoming update size (rebase on load / compaction). */
+export interface IncomingUpdateGateOptions {
+  doc: Y.Doc;
+  nowMs: number;
+  lastCapRemeasureMs: number;
+}
+
+export type IncomingUpdateGateResult =
+  | { ok: true; lastCapRemeasureMs?: number }
+  | { ok: false; reason: "message_too_large" | "room_storage_cap"; lastCapRemeasureMs?: number };
+
+/** Budget check: rebased doc size + incoming update (rebase on load / compaction). */
 export function incomingUpdateAllowed(
   state: RoomStorageState,
   updateByteLength: number,
-): { ok: true } | { ok: false; reason: "message_too_large" | "room_storage_cap" } {
+  opts?: IncomingUpdateGateOptions,
+): IncomingUpdateGateResult {
   if (updateByteLength > ROOM_MAX_SINGLE_UPDATE_BYTES) {
     return { ok: false, reason: "message_too_large" };
   }
-  if (state.storedBytes + updateByteLength > ROOM_MAX_STORED_BYTES) {
-    return { ok: false, reason: "room_storage_cap" };
+  if (state.storedBytes + updateByteLength <= ROOM_MAX_STORED_BYTES) {
+    return { ok: true };
   }
-  return { ok: true };
+  if (
+    opts &&
+    opts.nowMs - opts.lastCapRemeasureMs >= ROOM_STORAGE_REMEASURE_THROTTLE_MS
+  ) {
+    rebaseRoomStorage(state, opts.doc);
+    const lastCapRemeasureMs = opts.nowMs;
+    if (state.storedBytes + updateByteLength <= ROOM_MAX_STORED_BYTES) {
+      return { ok: true, lastCapRemeasureMs };
+    }
+    return { ok: false, reason: "room_storage_cap", lastCapRemeasureMs };
+  }
+  return { ok: false, reason: "room_storage_cap" };
 }
 
 /** Track applied update payload size without re-encoding the full doc. */

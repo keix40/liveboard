@@ -8,6 +8,7 @@ import type { BoardAsset } from "./assets";
 import type { BoardReaction } from "./reactions";
 import type { PinnedComment } from "./comments";
 import { arrowHeadLength, arrowShaftEnd } from "./shape-geometry";
+import { inkOnCanvas } from "./ink-display";
 
 export interface RenderBoardOpts {
   camera: Camera;
@@ -149,12 +150,12 @@ function drawBackground(
   }
 }
 
-function drawStrokeAt(ctx: CanvasRenderingContext2D, s: YStroke): void {
+function drawStrokeAt(ctx: CanvasRenderingContext2D, s: YStroke, darkMode: boolean): void {
   const { color, size, points, variant } = readStroke(s);
   const d = strokePath(points, size, variant);
   if (!d) return;
   ctx.globalAlpha = variant === "highlighter" ? 0.35 : 1;
-  ctx.fillStyle = color;
+  ctx.fillStyle = inkOnCanvas(color, darkMode);
   ctx.fill(new Path2D(d));
   ctx.globalAlpha = 1;
 }
@@ -208,21 +209,32 @@ export function renderBoardBase(ctx: CanvasRenderingContext2D, opts: RenderBoard
   }
 
   strokes.forEach((s, i) => {
-    if (!skip.has(i)) drawStrokeAt(ctx, s);
+    if (!skip.has(i)) drawStrokeAt(ctx, s, darkMode);
   });
   ctx.restore();
 }
 
 /** Ephemeral UI ink (live strokes, selection, lasso, shape preview). */
 export function renderBoardOverlay(ctx: CanvasRenderingContext2D, opts: RenderBoardOpts): void {
-  const { camera, dpr, strokes, shapes, notes, selection, lassoPath, previewShape, liveStrokeIndices } = opts;
+  const {
+    camera,
+    dpr,
+    strokes,
+    shapes,
+    notes,
+    selection,
+    lassoPath,
+    previewShape,
+    liveStrokeIndices,
+    darkMode = false,
+  } = opts;
   ctx.save();
   applyCamera(ctx, camera, dpr);
 
   if (liveStrokeIndices && liveStrokeIndices.length > 0) {
     for (const i of liveStrokeIndices) {
       const s = strokes[i];
-      if (s) drawStrokeAt(ctx, s);
+      if (s) drawStrokeAt(ctx, s, darkMode);
     }
   }
 
@@ -261,7 +273,15 @@ export function renderBoardOverlay(ctx: CanvasRenderingContext2D, opts: RenderBo
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     for (const r of opts.reactions) {
-      ctx.fillText(r.emoji, r.x, r.y);
+      const count = r.count ?? 1;
+      if (count > 1) {
+        ctx.fillText(r.emoji, r.x, r.y);
+        ctx.font = `${10 / camera.zoom}px system-ui, sans-serif`;
+        ctx.fillText(String(count), r.x + 10 / camera.zoom, r.y - 8 / camera.zoom);
+        ctx.font = `${16 / camera.zoom}px system-ui, sans-serif`;
+      } else {
+        ctx.fillText(r.emoji, r.x, r.y);
+      }
     }
   }
   if (opts.comments?.length) {

@@ -2,7 +2,14 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
-import { AUTO_SNAPSHOT_INTERVAL_MS, YKEYS, type Point, type RoomRole, type ShapeKind } from "@liveboard/shared";
+import {
+  AUTO_SNAPSHOT_INTERVAL_MS,
+  YKEYS,
+  pageSocialKey,
+  type Point,
+  type RoomRole,
+  type ShapeKind,
+} from "@liveboard/shared";
 import { useRoom } from "@/lib/useRoom";
 import {
   beginStroke,
@@ -57,6 +64,12 @@ import { listHistorySnapshots, pushSnapshot, restoreHistorySnapshot } from "@/li
 import { restorePageSnapshot, type PageSnapshot } from "@/lib/pages";
 import { getComments, type PinnedComment } from "@/lib/comments";
 import { getReactions, type BoardReaction } from "@/lib/reactions";
+import { createStrokeHoldSession } from "@/lib/stroke-hold";
+
+/** Peeked social maps are detached placeholders until created; skip them to avoid Yjs premature-access warnings. */
+function boundOrEmpty<T>(doc: Y.Doc, map: Y.Map<T>): Map<string, T> | Y.Map<T> {
+  return isBoundToDoc(doc, map) ? map : new Map<string, T>();
+}
 
 const STATUS_LABEL: Record<string, string> = {
   connected: "● Connected",
@@ -161,7 +174,8 @@ export function Whiteboard({
   const [shapeRecognize, setShapeRecognize] = useState(false);
   const [historyPreview, setHistoryPreview] = useState<PageSnapshot | null>(null);
   const previewDocRef = useRef<Y.Doc | null>(null);
-  const strokeHoldStillSinceRef = useRef<number | null>(null);
+  const strokeHoldRef = useRef<ReturnType<typeof createStrokeHoldSession> | null>(null);
+  if (strokeHoldRef.current == null) strokeHoldRef.current = createStrokeHoldSession();
   const lastStrokeRawRef = useRef<Point | null>(null);
   const [followPresenter, setFollowPresenter] = useState(false);
   const [isPresenter, setIsPresenter] = useState(false);
@@ -302,11 +316,20 @@ export function Whiteboard({
 
   const [reactionsRevision, setReactionsRevision] = useState(0);
   const [commentsRevision, setCommentsRevision] = useState(0);
+  const socialBound = doc
+    ? `${doc.share.has(pageSocialKey("comments", activePageId))}|${doc.share.has(pageSocialKey("reactions", activePageId))}`
+    : "";
+  const commentPlacementSeed = useMemo(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const w = screenToWorld(camera, canvas.clientWidth / 2, canvas.clientHeight / 2);
+    return { x: w.x, y: w.y };
+  }, [camera, metaRevision]);
   const panelComments = useMemo(() => {
     if (!doc) return [];
     void commentsRevision;
     const out: { id: string; text: string; x: number; y: number }[] = [];
-    getComments(doc).forEach((m, id) => {
+    boundOrEmpty(doc, getComments(doc, activePageId)).forEach((m, id) => {
       if (m instanceof Y.Map) {
         out.push({
           id,
@@ -317,7 +340,7 @@ export function Whiteboard({
       }
     });
     return out;
-  }, [doc, commentsRevision]);
+  }, [doc, commentsRevision, activePageId, socialBound]);
 
   const buildRenderOpts = useCallback(() => {
     const canvas = canvasRef.current!;
@@ -326,7 +349,7 @@ export function Whiteboard({
     const reactions: BoardReaction[] = [];
     const comments: PinnedComment[] = [];
     if (doc) {
-      getReactions(doc).forEach((m) => {
+      boundOrEmpty(doc, getReactions(doc, activePageId)).forEach((m) => {
         if (m instanceof Y.Map) {
           reactions.push({
             id: String(m.get("id")),
@@ -335,10 +358,11 @@ export function Whiteboard({
             y: Number(m.get("y")),
             authorId: String(m.get("authorId")),
             createdAt: Number(m.get("createdAt")),
+            count: Number(m.get("count") ?? 1),
           });
         }
       });
-      getComments(doc).forEach((m) => {
+      boundOrEmpty(doc, getComments(doc, activePageId)).forEach((m) => {
         if (m instanceof Y.Map) {
           comments.push({
             id: String(m.get("id")),
@@ -390,6 +414,8 @@ export function Whiteboard({
     doc,
     reactionsRevision,
     commentsRevision,
+    activePageId,
+    socialBound,
   ]);
 
   const paintFrame = useCallback(
@@ -431,7 +457,8 @@ export function Whiteboard({
     const pagesMap = doc.share.has(YKEYS.pages) ? doc.getMap(YKEYS.pages) : null;
     const onPagesDeep = () => setMetaRevision((n) => n + 1);
     pagesMap?.observeDeep(onPagesDeep);
-    const contentKeys = () => new Set([...doc.share.keys()].filter((k) => /^(strokes|shapes|notes|assets)(:|$)/.test(k)));
+    const contentKeys = () =>
+      new Set([...doc.share.keys()].filter((k) => /^(strokes|shapes|notes|assets|comments|reactions)(:|$)/.test(k)));
     let seenContent = contentKeys();
     const onDocChange = () => {
       const next = contentKeys();
@@ -507,18 +534,18 @@ export function Whiteboard({
       cleanups.push(() => boundAssets.unobserve(onAssets));
     }
 
-    const reactionsMap = getReactions(doc);
-    const commentsMap = getComments(doc);
+    const reactionsMap = getReactions(doc, activePageId);
+    const commentsMap = getComments(doc, activePageId);
     const onSocial = () => {
       setReactionsRevision((n) => n + 1);
       setCommentsRevision((n) => n + 1);
       scheduleFrame(true);
     };
-    reactionsMap.observe(onSocial);
-    commentsMap.observe(onSocial);
+    if (isBoundToDoc(doc, reactionsMap)) reactionsMap.observe(onSocial);
+    if (isBoundToDoc(doc, commentsMap)) commentsMap.observe(onSocial);
     cleanups.push(() => {
-      reactionsMap.unobserve(onSocial);
-      commentsMap.unobserve(onSocial);
+      if (isBoundToDoc(doc, reactionsMap)) reactionsMap.unobserve(onSocial);
+      if (isBoundToDoc(doc, commentsMap)) commentsMap.unobserve(onSocial);
     });
 
     const metaMap = doc.share.has(YKEYS.meta) ? doc.getMap(YKEYS.meta) : null;
@@ -530,7 +557,7 @@ export function Whiteboard({
     return () => {
       for (const fn of cleanups) fn();
     };
-  }, [boundStrokes, boundShapes, boundNotes, boundAssets, doc, scheduleFrame]);
+  }, [boundStrokes, boundShapes, boundNotes, boundAssets, doc, scheduleFrame, activePageId, socialBound]);
 
   useEffect(() => {
     if (!doc || !contentPreview) {
@@ -582,14 +609,14 @@ export function Whiteboard({
           if (prev.size === next.size && [...next.keys()].every((k) => prev.get(k) === next.get(k))) return prev;
           return next;
         });
-        setAssetRevision((n) => n + 1);
+        scheduleFrame(true);
       }
     };
     void load();
     return () => {
       cancelled = true;
     };
-  }, [boundAssets, assetRevision]);
+  }, [boundAssets, scheduleFrame]);
 
   useEffect(() => {
     if (!doc || readOnly) return;
@@ -676,6 +703,7 @@ export function Whiteboard({
     drawing.current = null;
     strokePointerIdRef.current = null;
     localLiveStrokeIndexRef.current = null;
+    strokeHoldRef.current?.dispose();
     scheduleFrame(true);
   }, [activePageId, clearTouchStrokePending, doc, scheduleFrame]);
 
@@ -698,6 +726,7 @@ export function Whiteboard({
       localLiveStrokeIndexRef.current = getStrokes(doc, activePageId).length - 1;
       pointBatcher.current?.dispose();
       pointBatcher.current = new StrokePointBatcher(doc, points);
+      strokeHoldRef.current?.arm();
       scheduleFrame(true);
     },
     [activePageId, beginAction, clearTouchStrokePending, color, doc, identity, scheduleFrame, size, tool],
@@ -961,8 +990,7 @@ export function Whiteboard({
           !prev ||
           Math.hypot(raw[0] - prev[0], raw[1] - prev[1]) >
             2 / Math.max(camera.zoom, 0.25);
-        if (moved) strokeHoldStillSinceRef.current = null;
-        else if (strokeHoldStillSinceRef.current == null) strokeHoldStillSinceRef.current = Date.now();
+        strokeHoldRef.current?.onMove(moved);
         const p = stabilizePoint(strokeHistoryRef.current, raw, stabilizer);
         strokeHistoryRef.current.push(p);
         pointBatcher.current?.push(p);
@@ -1064,10 +1092,7 @@ export function Whiteboard({
       strokePointerIdRef.current = null;
       localLiveStrokeIndexRef.current = null;
       strokeHistoryRef.current = [];
-      const heldStill =
-        strokeHoldStillSinceRef.current != null &&
-        Date.now() - strokeHoldStillSinceRef.current >= 500;
-      strokeHoldStillSinceRef.current = null;
+      const heldStill = strokeHoldRef.current?.finish() ?? false;
       if (shapeRecognize && heldStill && doc && identity && strokes && pointsArr) {
         const last = strokes.get(strokes.length - 1);
         if (last) {
@@ -1262,6 +1287,7 @@ export function Whiteboard({
           size={size}
           zoom={camera.zoom}
           compact={compactToolbar}
+          darkMode={boardMeta?.darkMode ?? false}
           readOnly={readOnly}
           statusChip={
             compactToolbar ? (
@@ -1384,7 +1410,9 @@ export function Whiteboard({
             shareLinks={shareLinks}
             editAccessBanner={editAccessBanner}
             comments={panelComments}
+            commentPlacementSeed={commentPlacementSeed}
             className={compactToolbar && !sidePanelOpen ? "collapsed" : undefined}
+            onClosePanel={compactToolbar && sidePanelOpen ? () => setSidePanelOpen(false) : undefined}
             history={listHistorySnapshots(doc)}
             onHistoryPreview={(snap) => setHistoryPreview(snap)}
             onClearHistoryPreview={() => setHistoryPreview(null)}
